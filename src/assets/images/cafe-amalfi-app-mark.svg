@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none" role="img" aria-label="Café Amalfi POS">
+  <circle cx="256" cy="256" r="226" stroke="#159FA2" stroke-width="18"/>
+  <circle cx="256" cy="256" r="204" stroke="#159FA2" stroke-width="3"/>
+  <path d="M145 257h205v78c0 53-43 96-96 96h-13c-53 0-96-43-96-96v-78Z" stroke="#159FA2" stroke-width="16" stroke-linejoin="round"/>
+  <path d="M350 278h20c34 0 56 23 56 54s-22 54-56 54h-28" stroke="#159FA2" stroke-width="16" stroke-linecap="round"/>
+  <path d="M205 225c-34-31-20-61 4-84 20-19 20-38 3-57" stroke="#168C48" stroke-width="18" stroke-linecap="round"/>
+  <path d="M255 222c-27-27-13-51 8-73 17-18 17-35 2-53" stroke="#AEB5B7" stroke-width="18" stroke-linecap="round"/>
+  <path d="M302 224c-25-31-10-57 10-79 17-18 16-36 1-54" stroke="#C62828" stroke-width="18" stroke-linecap="round"/>
+  <path d="M163 257c44 22 145 22 188 0" stroke="#159FA2" stroke-width="8" stroke-linecap="round"/>
+</svg>

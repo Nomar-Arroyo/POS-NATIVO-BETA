@@ -1,0 +1,24 @@
+[package]
+name = "pos-nativo-beta"
+version = "1.0.0-beta"
+description = "Sistema de Punto de Ventas Nativo"
+authors = ["Equipo de Desarrollo"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2.0.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.0.0", features = [] }
+tauri-plugin-shell = "2.0.0"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
