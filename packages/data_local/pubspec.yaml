@@ -1,0 +1,17 @@
+name: data_local
+description: Persistencia SQLite local y sincronización Offline-First para Caffè Amalfi POS.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  crypto: ^3.0.8
+  core_money:
+    path: ../core_money
+  sqlite3: ^2.8.0
+  uuid: ^4.5.1
+
+dev_dependencies:
+  test: ^1.25.0

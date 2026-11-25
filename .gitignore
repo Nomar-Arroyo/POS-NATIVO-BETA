@@ -2,6 +2,17 @@ node_modules/
 dist/
 coverage/
 src-tauri/target/
+apps/beta/node_modules/
+apps/beta/dist/
+apps/beta/coverage/
+apps/beta/src-tauri/target/
+**/.dart_tool/
+**/build/
+packages/*/pubspec.lock
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+apps/desktop/windows/flutter/ephemeral/
+apps/mobile_manager/windows/flutter/ephemeral/
 
 .env
 .env.*

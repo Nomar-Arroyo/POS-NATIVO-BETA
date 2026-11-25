@@ -1,0 +1,25 @@
+name: amalfi_brand_assets
+description: Shared Café Amalfi POS brand assets and SVG icon widgets.
+publish_to: none
+version: 1.0.0
+
+environment:
+  sdk: ^3.13.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_svg: ^2.0.10
+
+flutter:
+  assets:
+    - assets/brand/
+    - assets/backgrounds/
+    - assets/icons/svg/
+    - assets/icons/png/light/
+    - assets/icons/png/dark/
+    - assets/app_icon/
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
