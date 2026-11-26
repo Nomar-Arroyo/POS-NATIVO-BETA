@@ -31,7 +31,7 @@
 apps/
   beta/
   desktop/
-  mobile_manager/
+  mobile/
 packages/
   data_local/
   core_money/
@@ -46,11 +46,11 @@ supabase/
 
 La Beta React/Tauri se conserva en `apps/beta` con sus propios scripts,
 dependencias, documentación y persistencia. Las aplicaciones Flutter consumen
-los paquetes compartidos de `packages/`; `apps/mobile_manager` está reservado
-para la futura aplicación del gerente. La documentación de arquitectura y
-operación se mantiene en la raíz para que sirva a las tres aplicaciones.
-Supabase aún no está integrado y sus carpetas son trabajo futuro, no
-funcionalidad disponible.
+los paquetes compartidos de `packages/`; `apps/mobile` contiene el scaffold
+Flutter para las experiencias gerencial y de pedidos de clientes. La
+documentación transversal está en `docs/` y los documentos principales
+permanecen en la raíz. Supabase aún no está integrado; su estructura es una
+reserva para trabajo futuro, no funcionalidad disponible.
 
 ## 4. Capas
 

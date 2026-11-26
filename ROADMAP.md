@@ -7,9 +7,9 @@
 - [x] Flutter Desktop independiente en `apps/desktop`.
 - [x] Recursos visuales compartidos centralizados en
   `packages/amalfi_brand_assets`.
-- [x] Directorio reservado para la aplicación móvil de gerencia en
-  `apps/mobile_manager`.
-- [ ] Definir el alcance y desarrollar la aplicación móvil ejecutable.
+- [x] Scaffold Flutter multiplataforma en `apps/mobile`.
+- [ ] Acordar alcance y desarrollar las funciones móviles gerenciales y de
+  pedidos de clientes.
 
 ## Etapa 0 — Auditoría y transición
 

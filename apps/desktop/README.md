@@ -11,7 +11,7 @@ conserva en `apps/beta`.
 - ventas y movimientos de inventario transaccionales en SQLite;
 - tema claro, oscuro y sistema, con preferencia guardada por terminal;
 - identidad visual Amalfi con iconos SVG y fotografía de café integrada como
-  fondo difuminado en la zona inferior;
+  fondo de pantalla completa, viñeta suave y onda vectorial inferior;
 - eslogan del Dashboard y firma de marca del sidebar en tipografía nativa,
   sin usar imágenes rasterizadas de texto;
 - Dashboard con tarjetas de superficie limpia, estados vacíos informativos y

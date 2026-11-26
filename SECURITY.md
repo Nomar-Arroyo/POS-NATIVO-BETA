@@ -1,5 +1,9 @@
 # Seguridad
 
+El diseño de autorización por rol y aplicación se detalla en
+[docs/AUTHORIZATION.md](docs/AUTHORIZATION.md). Esta política es una referencia:
+el backend Supabase aún no está configurado.
+
 ## Autenticación
 
 - Supabase Auth para usuarios.

@@ -1,24 +1,41 @@
 # Café Amalfi POS
 
-Repositorio de las aplicaciones Café Amalfi POS y sus paquetes compartidos.
-La Beta y Flutter se mantienen como productos separados: la nueva app no lee ni
-modifica el almacenamiento local de la Beta.
+Monorepo de la aplicación Café Amalfi en desarrollo: una Beta React/Tauri
+conservada como referencia, un POS Flutter para Windows y una nueva aplicación
+Flutter móvil en preparación. Los paquetes compartidos aíslan cálculos,
+persistencia local, sincronización y recursos de marca. El backend remoto aún
+no está implementado.
 
 ## Aplicaciones
 
-- [Beta React/Tauri](apps/beta/README.md): referencia funcional existente.
-- [Desktop Flutter](apps/desktop/README.md): aplicación completa para Windows.
-- [App móvil de gerencia](apps/mobile_manager/README.md): espacio reservado para
-  la aplicación móvil del gerente; su alcance funcional se desarrollará por
-  separado.
+- [Beta React/Tauri](apps/beta/README.md): versión anterior conservada como
+  referencia funcional; sus datos permanecen separados.
+- [POS Desktop Flutter](apps/desktop/README.md): aplicación local para Windows.
+- [App móvil Flutter](apps/mobile/README.md): scaffold inicial para las
+  experiencias gerencial y de pedidos de clientes; las funciones están por
+  desarrollar.
 
-## Paquetes y documentación
+## Paquetes
 
-- `packages/`: reglas de negocio, persistencia, sincronización y recursos
-  compartidos entre aplicaciones Flutter.
-- [Arquitectura objetivo](ARQUITECTURA_OBJETIVO.md), [roadmap](ROADMAP.md),
-  [seguridad](SECURITY.md), [sincronización offline](OFFLINE_SYNC.md) y
-  [estrategia de pruebas](TESTING.md).
+- [core_money](packages/core_money/README.md): importes y cálculos exactos.
+- [core_sync](packages/core_sync/README.md): contratos de sincronización.
+- [data_local](packages/data_local/README.md): almacenamiento SQLite local.
+- [data_migration](packages/data_migration/README.md): importación piloto.
+- [amalfi_brand_assets](packages/amalfi_brand_assets/README.md): recursos de
+  marca compartidos.
+
+## Documentación
+
+- [Arquitectura objetivo](ARQUITECTURA_OBJETIVO.md)
+- [Roadmap](ROADMAP.md)
+- [Seguridad](SECURITY.md)
+- [Arquitectura de backend](docs/BACKEND_ARCHITECTURE.md)
+- [Esquema de datos](docs/DATABASE_SCHEMA.md)
+- [Contratos de API propuestos](docs/API_CONTRACTS.md)
+- [Autorización](docs/AUTHORIZATION.md)
+- [Protocolo de sincronización](docs/SYNC_PROTOCOL.md)
+- [App móvil](docs/MOBILE_APP.md)
+- [Documentación de referencia](docs/reference/)
 
 ## Comandos principales
 
@@ -42,6 +59,18 @@ flutter analyze
 flutter test
 flutter build windows
 ```
+
+Flutter Mobile:
+
+```powershell
+Set-Location apps/mobile
+flutter pub get
+flutter analyze
+flutter test
+```
+
+La carpeta `supabase/` reserva el lugar para migraciones, funciones, pruebas y
+seeds. No contiene un backend activo ni credenciales.
 
 Los datos de demostración de la Beta no son datos de producción. No se deben
 importar ni eliminar datos reales sin autorización.

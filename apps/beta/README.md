@@ -123,23 +123,24 @@ SENIAT y no son documentos fiscales válidos. Los detalles están en
 ## Documentación de transición a multiplataforma
 
 La arquitectura multiplataforma y la implementación Flutter se documentan en
-la raíz del repositorio:
+la raíz del repositorio y en `docs/`:
 
-- [Informe de auditoría de la Beta](../../INFORME_AUDITORIA_BETA.md)
+- [Informe de auditoría de la Beta](../../docs/reference/INFORME_AUDITORIA_BETA.md)
 - [Arquitectura objetivo](../../ARQUITECTURA_OBJETIVO.md)
-- [Plan de migración Flutter](../../PLAN_MIGRACION_FLUTTER.md)
-- [Matriz funcional](../../MATRIZ_FUNCIONAL.md)
+- [Plan de migración Flutter](../../docs/reference/PLAN_MIGRACION_FLUTTER.md)
+- [Matriz funcional](../../docs/reference/MATRIZ_FUNCIONAL.md)
 - [Roadmap](../../ROADMAP.md)
-- [Riesgos técnicos](../../RIESGOS_TECNICOS.md)
-- [Esquema de datos](../../DATABASE_SCHEMA.md)
-- [Migraciones de datos](../../DATABASE_MIGRATIONS.md)
-- [Sincronización offline](../../OFFLINE_SYNC.md)
-- [Motor monetario](../../MONEY_ENGINE.md)
+- [Riesgos técnicos](../../docs/reference/RIESGOS_TECNICOS.md)
+- [Esquema de datos](../../docs/DATABASE_SCHEMA.md)
+- [Migraciones de datos](../../docs/reference/DATABASE_MIGRATIONS.md)
+- [Sincronización offline](../../docs/SYNC_PROTOCOL.md)
+- [Motor monetario](../../docs/reference/MONEY_ENGINE.md)
 - [Seguridad](../../SECURITY.md)
-- [Plan de migración](../../MIGRATION_PLAN.md)
-- [Pruebas de infraestructura](../../TESTING.md)
+- [Plan de migración](../../docs/reference/MIGRATION_PLAN.md)
+- [Pruebas de infraestructura](../../docs/reference/TESTING.md)
 - [Paquete core_money](../../packages/core_money/README.md)
 - [Paquete data_local](../../packages/data_local/README.md)
 - [Paquete core_sync](../../packages/core_sync/README.md)
 - [Paquete data_migration](../../packages/data_migration/README.md)
 - [Aplicación desktop Flutter](../desktop/README.md)
+- [Aplicación móvil Flutter](../mobile/README.md)
