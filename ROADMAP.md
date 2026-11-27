@@ -38,12 +38,11 @@ Estado: **En desarrollo** — especificación completada; pendiente de aprobaci�
 - [x] Identidad persistente de terminal.
 - [x] Protocolo Outbox/Inbox y cursores.
 - [x] Política de conflictos e inventario offline.
-- [x] Esquema PostgreSQL propuesto.
+- [x] Esquema PostgreSQL implementado en migraciones 0001–0004.
 - [x] Esquema SQLite propuesto.
 - [x] Política monetaria y permisos.
-- [ ] Ejecución de migraciones.
-- [ ] Implementación de infraestructura.
-- [ ] Pruebas de esquema.
+- [x] Ejecución local de migraciones y pruebas de RLS/RPC (19 en verde).
+- [ ] Despliegue de infraestructura Supabase.
 
 ### Entregable B — core_money
 
@@ -106,11 +105,10 @@ Estado: **Implementado/Validado**.
 - [x] Pruebas ejecutadas: 15 aprobadas, incluidas perfiles, demo aislada, mesas y caja.
 - [x] `dart analyze`: sin incidencias.
 
-- Aprovisionar Supabase.
-- Diseñar esquema PostgreSQL.
-- Crear migraciones y RLS.
-- Implementar Auth y roles.
-- Importar catálogo real después de validar aproximadamente 317 SKU.
+- [x] Diseño del esquema PostgreSQL, migraciones 0001–0004, RLS, roles y RPC
+  implementados y probados localmente (26/11/2026).
+- [ ] Aprovisionar Supabase y desplegar las migraciones.
+- [ ] Importar catálogo real después de validar aproximadamente 317 SKU.
 - Implementar motor decimal.
 - Implementar SQLite y outbox.
 - Implementar sincronización inicial e idempotencia.
@@ -163,12 +161,13 @@ dispositivo real y conectar backend/sincronización.
 - [ ] Pagos en varias monedas, vuelto y división de cuenta por comensal.
 - [ ] Impresión física en impresora Windows/térmica.
 - [ ] Comandas generadas desde venta directa POS.
-- [ ] Supabase Auth/RLS, transporte remoto y reconexión real.
+- [x] Backend Auth/RLS y RPC implementados en `supabase/` (probados localmente).
+- [ ] Conectar el transporte remoto y la reconexión real desde Desktop.
 - [x] Validación final: `dart analyze`/`dart test`, `flutter analyze`/`flutter test` y `flutter build windows`.
 
 El flujo comercial real sigue siendo local: las operaciones quedan `PENDING`;
-Supabase/Auth/RLS y el transporte remoto siguen pausados. La demo opera sobre
-una base temporal en memoria y se descarta al salir. En la base real, productos
+el backend existe pero el transporte remoto del POS sigue sin conectarse. La
+demo opera sobre una base temporal en memoria y se descarta al salir. En la base real, productos
 sintéticos no se cobran ni se envían a comandas. Las comandas se pueden mostrar
 en el módulo local de producción o enviar en orden al diálogo de impresión si
 se deshabilita la pantalla de su estación. Los comprobantes son operativos, no

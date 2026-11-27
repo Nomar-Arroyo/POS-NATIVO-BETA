@@ -49,8 +49,9 @@ dependencias, documentación y persistencia. Las aplicaciones Flutter consumen
 los paquetes compartidos de `packages/`; `apps/mobile` contiene el scaffold
 Flutter para las experiencias gerencial y de pedidos de clientes. La
 documentación transversal está en `docs/` y los documentos principales
-permanecen en la raíz. Supabase aún no está integrado; su estructura es una
-reserva para trabajo futuro, no funcionalidad disponible.
+permanecen en la raíz. El backend PostgreSQL está implementado en `supabase/`
+(migraciones, RLS, RPC y pruebas), pero aún no está integrado a un proyecto
+Supabase desplegado ni conectado al POS.
 
 ## 4. Capas
 

@@ -1,8 +1,10 @@
 # Seguridad
 
 El diseño de autorización por rol y aplicación se detalla en
-[docs/AUTHORIZATION.md](docs/AUTHORIZATION.md). Esta política es una referencia:
-el backend Supabase aún no está configurado.
+[docs/AUTHORIZATION.md](docs/AUTHORIZATION.md). El backend PostgreSQL (Auth,
+RLS y RPC) está implementado y probado localmente en `supabase/`; aún no se ha
+desplegado a un proyecto Supabase (ver
+[docs/BACKEND_DEPLOYMENT.md](docs/BACKEND_DEPLOYMENT.md)).
 
 ## Autenticación
 
@@ -39,12 +41,15 @@ el backend Supabase aún no está configurado.
 
 Permisos se almacenan en tabla, asignan por rol y se verifican en RLS/RPC.
 Los perfiles y permisos locales de escritorio son solo una política offline
-temporal; se deberán vincular a Auth/RLS cuando Supabase esté disponible.
+temporal; el backend ya resuelve roles efectivos en el servidor, pero el
+transporte remoto de escritorio aún no está conectado.
 
 ## RLS
 
-Toda tabla sensible filtra por `organization_id` y perfil autorizado. Las políticas
-deben ser verificadas con usuarios sintéticos de cada rol.
+Toda tabla sensible filtra por `organization_id` y perfil autorizado. Las
+políticas implementadas son de solo lectura y las escrituras pasan únicamente
+por RPC; están verificadas con usuarios sintéticos de cada rol en
+`supabase/tests/backend.test.mjs`.
 
 ## Terminales
 

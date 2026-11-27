@@ -1,110 +1,157 @@
-# Arquitectura Offline/Sync
+# Protocolo de sincronización
 
-## Estados
+Estado del backend: **transporte RPC implementado y probado** (idempotencia,
+recibos, conflictos terminales y descarga incremental). El POS Desktop todavía
+no tiene transporte remoto conectado; sus operaciones quedan `PENDING`.
 
-Toda entidad sincronizable expone `LOCAL`, `PENDING`, `SYNCED` o `ERROR`.
+## 1. Estados locales
 
-- **LOCAL:** creada localmente y sin intención de envío.
-- **PENDING:** confirmada localmente y pendiente de outbox.
-- **SYNCED:** recibo remoto verificable y confirmado.
-- **ERROR:** solicitud remota rechazada o fallida; conserva el original.
+Toda entidad sincronizable expone `LOCAL`, `PENDING`, `SYNCED`, `ERROR` o
+`CONFLICT`.
 
-## Outbox transaccional
+- **LOCAL:** creada localmente sin intención de envío.
+- **PENDING:** confirmada localmente y en outbox.
+- **SYNCED:** recibo remoto válido que coincide en operación, entidad y clave.
+- **ERROR:** fallo temporal agotado o rechazo no comercial; conserva el original.
+- **CONFLICT:** rechazo comercial verificable; exige reconciliación.
+
+Regla: **solo `SYNCED` con recibo válido**. `receipt != null` no basta; el motor
+debe comprobar `accepted`, `operation_id`, `entity` e `idempotency_key`.
+
+## 2. Outbox transaccional
 
 SQLite confirma en una transacción:
 
-1. configuración inicial y alta de catálogo local, cuando corresponda;
-2. venta, movimientos de inventario y efectivo;
-3. reservas y cambios de salón/comandas;
-4. pagos y cierre de sesión de mesa;
-5. apertura/cierre y movimientos manuales de caja;
-6. auditoría local;
-7. registro outbox de cada operación.
+1. venta, líneas, pagos, movimientos de inventario y efectivo;
+2. reservas y cambios de salón/comandas;
+3. cierre de sesión de mesa;
+4. apertura/cierre y movimientos manuales de caja;
+5. auditoría local;
+6. registro outbox por operación.
 
-Si falla cualquier paso, rollback completo.
+Si falla un paso, rollback completo. El catálogo sintético no genera eventos de
+catálogo y no se comparte entre modo demo y operación real.
 
-La app de escritorio aún no configura un transporte remoto. Estas operaciones
-permanecen pendientes localmente y no se marcan como sincronizadas.
+## 3. Idempotencia
 
-El catálogo sintético no crea eventos de catálogo en la outbox. En la base de
-operación real, sus productos no se pueden vender ni agregar a comandas. El
-modo demo usa una base SQLite `:memory:` separada: allí se permiten ventas y
-comandas simuladas, pero la base y su outbox no se comparten con el entorno real
-ni se conectan a un transporte remoto. Al salir del modo demo, la base temporal
-se descarta.
+- Cada operación tiene UUID y `idempotency_key` de 8–120 caracteres.
+- El servidor busca el recibo **antes** de validar y aplicar.
+- Recibo aceptado repetido → devuelve el mismo resultado, sin nuevos efectos.
+- Dos ventas iguales en importes no son duplicados: difieren en UUID, terminal,
+  usuario y clave.
+- La clave es única por organización en `sync_operations`, `sync_receipts`,
+  `sales`, `payments`, `cash_sessions`, `cash_movements`, `customer_orders` y
+  movimientos de inventario.
 
-Las pantallas locales de cocina/barra se habilitan por estación. Si una estación
-se deshabilita en Configuración, las comandas ya persistidas se envían en orden
-al diálogo de impresión del sistema; cancelar o fallar una impresión no revierte
-ni elimina la comanda. El destino remoto entre terminales requiere backend y
-sincronización, aún pausados.
+## 4. `confirm_sale` v1
 
-## Inbox y idempotencia
+Contrato completo en [API_CONTRACTS.md](API_CONTRACTS.md#3-rpc_confirm_sale-salev1).
+Resumen:
 
-Toda operación tiene UUID e `idempotency_key`. El servidor busca el recibo antes
-de validar y aplicar efectos. Si existe, devuelve el resultado previo.
+```json
+{
+  "schema_version": "sale.v1",
+  "idempotency_key": "sale-<uuid>",
+  "sale": {
+    "id": "uuid", "branch_id": "uuid", "terminal_id": "uuid",
+    "cash_session_id": "uuid|null", "dining_session_id": "uuid|null",
+    "total_currency": "USD", "total_minor": 700
+  },
+  "items": [{ "variant_id": "uuid", "quantity": 2, "unit_price_minor": 350 }],
+  "payments": [{ "method": "cash", "amount_minor": 700, "currency_code": "USD" }],
+  "inventory_consumptions": [
+    { "warehouse_id": "uuid", "variant_id": "uuid", "quantity": 2 }
+  ]
+}
+```
 
-Dos ventas con los mismos productos e importes no son duplicados: difieren por
-UUID, terminal, usuario y clave. El único duplicado es la misma operación repetida
-con la misma clave.
+El servidor valida esquema, terminal, catálogo, precios, totales, pagos, caja,
+mesa y stock. La venta, sus efectos y la auditoría son atómicos.
 
-## Reintentos
+### Recibo válido
 
-- Backoff exponencial.
-- Jitter aleatorio acotado.
-- Máximo configurable de intentos.
-- `next_attempt_at` persistido.
-- Errores permanentes no reintentan sin intervención o corrección.
-- Reanudar después de reinicio sin depender de memoria.
+```json
+{
+  "accepted": true,
+  "duplicate": false,
+  "receipt_id": "uuid",
+  "entity_type": "sale",
+  "entity_id": "uuid",
+  "idempotency_key": "sale-...",
+  "schema_version": "sale.v1",
+  "remote_version": 1,
+  "received_at": "2026-11-26T20:00:00Z"
+}
+```
 
-## Cursores
+### Conflicto comercial
 
-El servidor entrega cambios paginados usando `(updated_at, id)`. El cliente
-completa una página transaccionalmente antes de persistir el cursor. Realtime
-puede anticipar una descarga, pero no reemplaza el cursor.
+```json
+{
+  "accepted": false,
+  "duplicate": false,
+  "code": "PRICE_CHANGED",
+  "message": "Precio vigente 350 distinto al enviado 1",
+  "idempotency_key": "sale-..."
+}
+```
 
-## Conflictos
+El conflicto se guarda en `sync_operations` (`CONFLICT`), se audita y **consume
+la clave**: un reintento con la misma clave no se reaplica. Para reconciliar se
+corrige localmente y se emite una clave nueva; la operación original no se
+borra.
 
-- ventas y movimientos nunca se sobrescriben;
-- catálogo usa versión para resolver cambios;
-- caja cerrada, terminal revocado y stock insuficiente generan conflicto;
-- el conflicto queda visible con recibo, payload y diferencia;
-- resolución solo mediante operación compensatoria autorizada.
+## 5. Conflictos terminales por clave
 
-## Reconexión
+| Código | Significado |
+| --- | --- |
+| `SCHEMA_VERSION_UNSUPPORTED` | Versión de contrato no soportada |
+| `TERMINAL_INVALID` | Terminal inexistente, de otra sucursal o revocado |
+| `ITEM_INVALID` / `VARIANT_INVALID` | Línea o variante no vendible |
+| `PRICE_CHANGED` | Precio enviado distinto al vigente |
+| `TOTAL_MISMATCH` | Total no coincide con líneas |
+| `PAYMENT_INVALID` / `PAYMENT_MISMATCH` | Pago inválido o suma distinta |
+| `CURRENCY_MISMATCH` | Monedas inconsistentes |
+| `CASH_SESSION_INVALID` | Caja cerrada, ajena o de otro terminal |
+| `DINING_SESSION_INVALID` | Mesa cerrada o ajena |
+| `INSUFFICIENT_STOCK` | Stock insuficiente; toda la venta revierte |
+
+`TERMINAL_INVALID`, `CASH_SESSION_INVALID` y `DINING_SESSION_INVALID` no se
+reintentan sin intervención. `INSUFFICIENT_STOCK` puede resolverse con un
+movimiento de inventario y una clave nueva.
+
+## 6. Reintentos
+
+- Backoff exponencial con jitter acotado y `next_attempt_at` persistido.
+- Errores permanentes no reintentan sin corrección.
+- Reinicio no pierde outbox, recibos, cursores ni conflictos.
+- `RetryPolicy` y `CursorStore` de `packages/core_sync` implementan el contrato.
+
+## 7. Descarga incremental
+
+`rpc_pull_catalog` devuelve cambios por `updated_at > since` y
+`updated_at <= cursor`, con `cursor` calculado al inicio de la consulta. Incluye
+categorías, productos, variantes, modificadores, mesas permitidas y todas las
+tasas de cambio. El cliente persiste una página completa antes de guardar el
+cursor. Realtime no reemplaza este mecanismo.
+
+## 8. Reconexión
 
 1. Confirmar sesión y permisos.
-2. Subir operaciones outbox en orden transaccional.
-3. Guardar recibos.
+2. Subir outbox en orden transaccional.
+3. Guardar recibos y marcar `SYNCED` solo si son válidos.
 4. Descargar cambios y avanzar cursores.
-5. Ejecutar reconciliación de inventario y caja.
-6. Exponer estados sin afirmar sincronización para ventas solo locales.
+5. Reconciliar inventario y caja; resolver conflictos con operaciones nuevas.
+6. No mostrar como sincronizado lo que solo existe localmente.
 
-## Implementación inicial SQLite
+## 9. Implementación
 
-`packages/data_local` implementa la persistencia local y el outbox básico:
+- `packages/core_sync`: `SyncEngine`, `SyncTransport`, `SyncInbox`,
+  `RetryPolicy`, `CursorStore`, `SyncConflict`, `SyncStatus.conflict`.
+- `packages/data_local`: outbox transaccional, recibos, errores, cursores.
+- Backend: `app.lookup_receipt`, `app.record_receipt`,
+  `app.finish_conflict`, triggers append-only y RPC por operación.
 
-- una venta confirmada crea su outbox en la misma transacción;
-- el estado inicial es `PENDING`;
-- `markSynced` crea un recibo y cambia la venta a `SYNCED`;
-- errores conservan la operación y crean registros `sync_errors`;
-- cursores se persisten por terminal y stream;
-- llaves idempotentes impiden repetir una operación confirmada;
-- ventas distintas conservan IDs y claves distintas aunque tengan igual total.
-
-## Entregable D — Motor de sincronización
-
-`packages/core_sync` implementa el contrato independiente de UI y transporte:
-
-- `SyncEngine` orquesta outbox y recibos;
-- `SyncTransport` abstrae HTTP/RPC/Realtime;
-- `SyncInbox` conserva el primer recibo por llave idempotente;
-- `RetryPolicy` aplica backoff exponencial y jitter acotado;
-- `CursorStore` conserva cursores por stream;
-- `SyncConflict` registra conflictos comerciales sin sobrescribir ventas;
-- `SyncStatus.conflict` separa conflictos de errores temporales;
-- operaciones distintas no se deduplican por payload equivalente.
-
-Cada reintento persiste su número; el límite configurable impide loops infinitos.
-Los errores permanentes tienen `retryable = false`. Realtime solo puede activar
-descargas; la recuperación normal depende de outbox, transportes e inbox.
+Pendiente en clientes: transporte Supabase real, persistencia del estado del
+motor, validación estricta de recibos (E-05) y contrato de outbox completo
+(E-04).

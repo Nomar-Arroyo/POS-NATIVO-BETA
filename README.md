@@ -3,8 +3,8 @@
 Monorepo de la aplicación Café Amalfi en desarrollo: una Beta React/Tauri
 conservada como referencia, un POS Flutter para Windows y una nueva aplicación
 Flutter móvil en preparación. Los paquetes compartidos aíslan cálculos,
-persistencia local, sincronización y recursos de marca. El backend remoto aún
-no está implementado.
+persistencia local, sincronización y recursos de marca. El backend PostgreSQL
+está implementado y probado localmente; aún no se ha desplegado a Supabase.
 
 ## Aplicaciones
 
@@ -26,14 +26,17 @@ no está implementado.
 
 ## Documentación
 
+- [Plan de trabajo compartido](docs/PLAN_TRABAJO.md)
 - [Arquitectura objetivo](ARQUITECTURA_OBJETIVO.md)
 - [Roadmap](ROADMAP.md)
 - [Seguridad](SECURITY.md)
 - [Arquitectura de backend](docs/BACKEND_ARCHITECTURE.md)
 - [Esquema de datos](docs/DATABASE_SCHEMA.md)
-- [Contratos de API propuestos](docs/API_CONTRACTS.md)
+- [Contratos de API](docs/API_CONTRACTS.md)
 - [Autorización](docs/AUTHORIZATION.md)
+- [Tablets de clientes](docs/CUSTOMER_TABLETS.md)
 - [Protocolo de sincronización](docs/SYNC_PROTOCOL.md)
+- [Despliegue del backend](docs/BACKEND_DEPLOYMENT.md)
 - [App móvil](docs/MOBILE_APP.md)
 - [Documentación de referencia](docs/reference/)
 
@@ -69,8 +72,9 @@ flutter analyze
 flutter test
 ```
 
-La carpeta `supabase/` reserva el lugar para migraciones, funciones, pruebas y
-seeds. No contiene un backend activo ni credenciales.
+La carpeta `supabase/` contiene las migraciones, el seed de desarrollo y las
+pruebas de integración del backend local. No contiene secretos ni un despliegue
+activo; consulta [docs/BACKEND_DEPLOYMENT.md](docs/BACKEND_DEPLOYMENT.md).
 
 Los datos de demostración de la Beta no son datos de producción. No se deben
 importar ni eliminar datos reales sin autorización.
