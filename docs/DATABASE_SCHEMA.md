@@ -1,8 +1,9 @@
 # Esquema de datos PostgreSQL
 
-Estado: **implementado como migraciones versionadas**, verificado en PostgreSQL 19
-con `supabase/tests/backend.test.mjs` (19 pruebas en verde al 26 de noviembre de
-2026). Las migraciones son la fuente de verdad; este documento las resume.
+Estado: **implementado como migraciones versionadas**, verificado localmente en
+PostgreSQL 17 y cubierto por CI en PostgreSQL 16 con
+`supabase/tests/backend.test.mjs` (25 pruebas al 27 de noviembre de 2026).
+Las migraciones son la fuente de verdad; este documento las resume.
 
 | Migración | Contenido |
 | --- | --- |
@@ -10,6 +11,8 @@ con `supabase/tests/backend.test.mjs` (19 pruebas en verde al 26 de noviembre de
 | `20261126090100_0002_authz_rls.sql` | Helpers `app.*`, roles/permisos por defecto, RLS de lectura y privilegios mínimos |
 | `20261126090200_0003_commercial_rpc.sql` | RPC de terminales, venta, inventario, caja, salón y producción |
 | `20261126090300_0004_customer_sync.sql` | Pairing, sesiones de dispositivo, menú, pedidos de cliente, cancelación y descarga incremental |
+| `20261126090500_0005_production_station_reservations.sql` | Estación de producción por perfil, RLS por estación, consumo de reservas al vender y replay de conflictos |
+| `20261126090600_0006_harden_app_grants.sql` | Revoca `EXECUTE` de `PUBLIC` en `app.*` y `USAGE` de `anon` en el esquema interno |
 
 No se ha desplegado en un proyecto Supabase real; ver
 [BACKEND_DEPLOYMENT.md](BACKEND_DEPLOYMENT.md).
@@ -89,7 +92,8 @@ terminals(id uuid pk, organization_id fk, branch_id fk, name,
   created_at, updated_at, version, unique(organization_id, name));
 
 profiles(id uuid pk references auth.users(id), organization_id fk,
-  display_name, status active|disabled, created_at, updated_at, deleted_at);
+  display_name, status active|disabled, production_station
+  KITCHEN|BAR|BOTH default BOTH, created_at, updated_at, deleted_at);
 
 profile_branches(profile_id fk, branch_id fk, organization_id fk,
   primary key(profile_id, branch_id));
@@ -168,6 +172,9 @@ inventory_reservations(id uuid pk, organization_id fk, warehouse_id fk,
   menú de tablet.
 - Las reservas de pedidos de cliente expiran en 30 minutos y se liberan al
   cancelar.
+- Al confirmar la venta de una mesa, las reservas `ACTIVE` de esa sesión pasan a
+  `CONSUMED` (o `RELEASED` si no tienen línea de consumo) y se descuentan de
+  `reserved_minor`; una venta directa no toca reservas ajenas.
 
 ## 6. Ventas y pagos
 
@@ -292,6 +299,8 @@ production_order_items(id uuid pk, organization_id fk,
 Una sesión de mesa solo se cierra al confirmar su venta, dentro de la misma
 transacción. Las comandas de productos `KITCHEN`/`BAR` nacen `SENT` y crean una
 orden de producción por estación; los `UNASSIGNED` quedan `PENDING`.
+`profiles.production_station` limita la lectura RLS y las RPC de envío/cambio de
+estado a la estación asignada (`BOTH` = sin restricción).
 
 ## 10. Tablets de cliente
 

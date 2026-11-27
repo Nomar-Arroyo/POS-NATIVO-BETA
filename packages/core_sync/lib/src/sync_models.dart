@@ -35,6 +35,7 @@ class SyncReceipt {
     required this.entityId,
     required this.remoteVersion,
     required this.accepted,
+    this.operationType,
   });
 
   final String idempotencyKey;
@@ -42,6 +43,25 @@ class SyncReceipt {
   final String entityId;
   final int remoteVersion;
   final bool accepted;
+  final String? operationType;
+
+  Map<String, dynamic> toJson() => {
+        'idempotency_key': idempotencyKey,
+        'operation_id': operationId,
+        'operation_type': operationType,
+        'entity_id': entityId,
+        'remote_version': remoteVersion,
+        'accepted': accepted,
+      };
+
+  factory SyncReceipt.fromJson(Map<String, dynamic> json) => SyncReceipt(
+        idempotencyKey: json['idempotency_key'] as String,
+        operationId: json['operation_id'] as String,
+        operationType: json['operation_type'] as String?,
+        entityId: json['entity_id'] as String,
+        remoteVersion: (json['remote_version'] as num).toInt(),
+        accepted: json['accepted'] as bool,
+      );
 }
 
 class SyncError {
@@ -54,4 +74,16 @@ class SyncError {
   final String code;
   final String message;
   final bool retryable;
+
+  Map<String, dynamic> toJson() => {
+        'code': code,
+        'message': message,
+        'retryable': retryable,
+      };
+
+  factory SyncError.fromJson(Map<String, dynamic> json) => SyncError(
+        code: json['code'] as String,
+        message: json['message'] as String,
+        retryable: json['retryable'] as bool,
+      );
 }

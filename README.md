@@ -10,7 +10,8 @@ está implementado y probado localmente; aún no se ha desplegado a Supabase.
 
 - [Beta React/Tauri](apps/beta/README.md): versión anterior conservada como
   referencia funcional; sus datos permanecen separados.
-- [POS Desktop Flutter](apps/desktop/README.md): aplicación local para Windows.
+- [POS Desktop Flutter](apps/desktop/README.md): aplicación Windows offline-first
+  con sincronización opcional a Supabase (`confirm_sale`).
 - [App móvil Flutter](apps/mobile/README.md): scaffold inicial para las
   experiencias gerencial y de pedidos de clientes; las funciones están por
   desarrollar.

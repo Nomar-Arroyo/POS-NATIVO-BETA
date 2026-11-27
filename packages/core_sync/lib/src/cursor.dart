@@ -23,8 +23,18 @@ class CursorStore {
 
   ChangeCursor? get(String stream) => _cursors[stream];
 
+  List<ChangeCursor> get values =>
+      List<ChangeCursor>.unmodifiable(_cursors.values);
+
   void advance(ChangeCursor cursor) {
     _cursors[cursor.stream] = cursor;
+  }
+
+  void restore(Iterable<ChangeCursor> cursors) {
+    _cursors.clear();
+    for (final cursor in cursors) {
+      _cursors[cursor.stream] = cursor;
+    }
   }
 
   void clear(String stream) {

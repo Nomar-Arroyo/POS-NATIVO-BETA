@@ -241,6 +241,44 @@ test('anon no lee tablas ni ejecuta RPC de personal', async () => {
   });
 });
 
+test('helpers internos de app no son ejecutables por roles de cliente', async () => {
+  assert.equal(
+    await scalar(`
+      select count(*)::int from pg_proc p
+        join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'app' and has_function_privilege('anon', p.oid, 'execute')
+    `),
+    0,
+  );
+  assert.equal(
+    await scalar("select has_schema_privilege('anon', 'app', 'usage')"),
+    false,
+  );
+
+  await withTx(async () => {
+    await asAnon();
+    await expectReject(
+      `select app.record_receipt($1, null, 'test', 'sale', gen_random_uuid(),
+                                 'anon-key', 'v1', '{}'::jsonb, 1)`,
+      [ORG_A],
+      /permission denied|does not exist/i,
+    );
+  });
+
+  assert.equal(
+    await scalar(`
+      select count(*)::int from pg_proc p
+        join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'app'
+         and p.proname in ('current_organization_id', 'current_profile_id',
+                           'branch_allowed', 'has_permission_in',
+                           'production_station_allows')
+         and not has_function_privilege('authenticated', p.oid, 'execute')
+    `),
+    0,
+  );
+});
+
 test('aislamiento por organización y denegación de escritura directa', async () => {
   await withTx(async () => {
     await asUser(ADMIN_A);
@@ -428,10 +466,21 @@ test('precio manipulado se rechaza, se audita y exige nueva clave', async () => 
       idempotencyKey: badKey,
       unitPrice: 350,
     });
-    await expectReject(
-      'select public.rpc_confirm_sale($1::jsonb)',
-      [JSON.stringify(corrected)],
-      /duplicate key|unique constraint/,
+    const replay = await rpc('rpc_confirm_sale', corrected);
+    assert.equal(replay.accepted, false);
+    assert.equal(replay.code, 'PRICE_CHANGED');
+    assert.equal(replay.idempotency_key, badKey);
+    assert.equal(typeof replay.operation_id, 'string');
+
+    await asOwner();
+    assert.equal(await scalar('select count(*)::int from public.sales'), 0);
+    assert.equal(
+      await scalar(
+        `select count(*)::int from public.sync_operations
+          where idempotency_key = $1 and status = 'CONFLICT'`,
+        [badKey],
+      ),
+      1,
     );
   });
 
@@ -851,6 +900,510 @@ test('cocina/barra actualizan el estado visible del pedido', async () => {
       order_id: order.order_id,
     });
     assert.equal(status.orders[0].status, 'READY');
+  });
+});
+
+test('estación de producción limita lectura, envío y cambio de estado', async () => {
+  await withTx(async () => {
+    const device = await newDevice(TABLE_1);
+    const order = await submitOrder(device.token, [
+      { variant_id: LATTE_V, quantity: '1' },
+      { variant_id: AREPA_V, quantity: '1' },
+    ]);
+
+    await asOwner();
+    const production = await client.query(
+      "select id, station from public.production_orders where customer_order_id = $1",
+      [order.order_id],
+    );
+    const bar = production.rows.find((row) => row.station === 'BAR');
+    const kitchen = production.rows.find((row) => row.station === 'KITCHEN');
+    const diningSessionId = await scalar(
+      "select id from public.dining_sessions where dining_table_id = $1 and status = 'OPEN'",
+      [TABLE_1],
+    );
+    await client.query(
+      "update public.profiles set production_station = 'KITCHEN' where id = $1",
+      [KITCHEN_A],
+    );
+
+    await asUser(KITCHEN_A);
+    const visible = await client.query(
+      'select station from public.production_orders order by station',
+    );
+    assert.deepEqual(visible.rows.map((row) => row.station), ['KITCHEN']);
+    const visibleItems = await client.query(
+      'select count(*)::int as total from public.production_order_items',
+    );
+    assert.equal(visibleItems.rows[0].total, 1);
+
+    await client.query('savepoint station_denied');
+    await expectReject(
+      'select public.rpc_update_production_status($1::jsonb)',
+      [
+        JSON.stringify({
+          schema_version: 'production.v1',
+          production_order_id: bar.id,
+          status: 'PREPARING',
+          idempotency_key: key('prod'),
+        }),
+      ],
+      /FORBIDDEN/,
+    );
+    await client.query('rollback to savepoint station_denied');
+
+    const kitchenUpdate = await rpc('rpc_update_production_status', {
+      schema_version: 'production.v1',
+      production_order_id: kitchen.id,
+      status: 'PREPARING',
+      idempotency_key: key('prod'),
+    });
+    assert.equal(kitchenUpdate.accepted, true);
+
+    await asOwner();
+    await client.query(
+      "update public.profiles set production_station = 'KITCHEN' where id = $1",
+      [ADMIN_A],
+    );
+    await asUser(ADMIN_A);
+    const sendKey = key('send');
+    await client.query('savepoint send_denied');
+    await expectReject(
+      'select public.rpc_send_production($1::jsonb)',
+      [
+        JSON.stringify({
+          schema_version: 'production.v1',
+          dining_session_id: diningSessionId,
+          station: 'BAR',
+          idempotency_key: sendKey,
+        }),
+      ],
+      /FORBIDDEN/,
+    );
+    await client.query('rollback to savepoint send_denied');
+
+    await asOwner();
+    assert.equal(
+      await scalar('select status from public.production_orders where id = $1', [
+        bar.id,
+      ]),
+      'PENDING',
+    );
+    assert.equal(
+      await scalar(
+        'select count(*)::int from public.sync_operations where idempotency_key = $1',
+        [sendKey],
+      ),
+      0,
+    );
+  });
+});
+
+test('venta de mesa consume las reservas del pedido sin liberarlas dos veces', async () => {
+  await withTx(async () => {
+    const device = await newDevice(TABLE_1);
+    const order = await submitOrder(device.token, [
+      { variant_id: LATTE_V, quantity: '1' },
+      { variant_id: AREPA_V, quantity: '1' },
+    ]);
+    assert.equal(order.accepted, true);
+
+    await asOwner();
+    const diningSessionId = await scalar(
+      "select id from public.dining_sessions where dining_table_id = $1 and status = 'OPEN'",
+      [TABLE_1],
+    );
+    assert.ok(diningSessionId);
+    assert.equal(
+      await scalar(
+        'select reserved_minor from public.inventory_balances where warehouse_id = $1 and variant_id = $2',
+        [WH_A1, LATTE_V],
+      ),
+      '1000',
+    );
+    assert.equal(
+      await scalar(
+        'select reserved_minor from public.inventory_balances where warehouse_id = $1 and variant_id = $2',
+        [WH_A1, AREPA_V],
+      ),
+      '1000',
+    );
+
+    await asUser(ADMIN_A);
+    const terminal = await registerTerminal();
+    const saleId = randomUUID();
+    const payload = {
+      idempotency_key: key('sale'),
+      schema_version: 'sale.v1',
+      sale: {
+        id: saleId,
+        branch_id: BRANCH_A1,
+        terminal_id: terminal.entity_id,
+        cash_session_id: null,
+        dining_session_id: diningSessionId,
+        sale_number: `T-${saleId.slice(0, 8)}`,
+        total_currency: 'USD',
+        total_minor: '850',
+      },
+      items: [
+        {
+          variant_id: LATTE_V,
+          quantity: '1',
+          unit_price_minor: '350',
+          tax_minor: '0',
+        },
+        {
+          variant_id: AREPA_V,
+          quantity: '1',
+          unit_price_minor: '500',
+          tax_minor: '0',
+        },
+      ],
+      payments: [
+        { method: 'TARJETA', amount_minor: '850', currency_code: 'USD' },
+      ],
+      inventory_consumptions: [
+        { warehouse_id: WH_A1, variant_id: LATTE_V, quantity: '1000' },
+        { warehouse_id: WH_A1, variant_id: AREPA_V, quantity: '1000' },
+      ],
+    };
+
+    const sale = await rpc('rpc_confirm_sale', payload);
+    assert.equal(sale.accepted, true);
+    assert.equal(sale.entity_id, saleId);
+
+    const dup = await rpc('rpc_confirm_sale', payload);
+    assert.equal(dup.accepted, true);
+    assert.equal(dup.duplicate, true);
+
+    await asOwner();
+    assert.equal(
+      await scalar(
+        "select count(*)::int from public.inventory_reservations where customer_order_id = $1 and status = 'CONSUMED'",
+        [order.order_id],
+      ),
+      2,
+    );
+    assert.equal(
+      await scalar(
+        "select count(*)::int from public.inventory_reservations where customer_order_id = $1 and status = 'RELEASED'",
+        [order.order_id],
+      ),
+      0,
+    );
+    assert.equal(
+      await scalar(
+        'select quantity_minor from public.inventory_balances where warehouse_id = $1 and variant_id = $2',
+        [WH_A1, LATTE_V],
+      ),
+      '4000',
+    );
+    assert.equal(
+      await scalar(
+        'select quantity_minor from public.inventory_balances where warehouse_id = $1 and variant_id = $2',
+        [WH_A1, AREPA_V],
+      ),
+      '2000',
+    );
+    for (const variant of [LATTE_V, AREPA_V]) {
+      assert.equal(
+        await scalar(
+          'select reserved_minor from public.inventory_balances where warehouse_id = $1 and variant_id = $2',
+          [WH_A1, variant],
+        ),
+        '0',
+      );
+    }
+    assert.equal(
+      await scalar(
+        `select after_json->>'reservations_consumed'
+           from public.audit_logs
+          where action = 'SALE_CONFIRMED_REMOTE' and entity_id = $1`,
+        [saleId],
+      ),
+      '2',
+    );
+    assert.equal(
+      await scalar('select status from public.dining_sessions where id = $1', [
+        diningSessionId,
+      ]),
+      'CLOSED',
+    );
+  });
+});
+
+test('venta directa no consume ni libera reservas de una mesa', async () => {
+  await withTx(async () => {
+    const device = await newDevice(TABLE_1);
+    const order = await submitOrder(device.token, [
+      { variant_id: LATTE_V, quantity: '1' },
+    ]);
+    assert.equal(order.accepted, true);
+
+    await asUser(ADMIN_A);
+    const terminal = await registerTerminal();
+    const sale = await rpc('rpc_confirm_sale', {
+      idempotency_key: key('sale'),
+      schema_version: 'sale.v1',
+      sale: {
+        id: randomUUID(),
+        branch_id: BRANCH_A1,
+        terminal_id: terminal.entity_id,
+        cash_session_id: null,
+        dining_session_id: null,
+        sale_number: `T-${randomUUID().slice(0, 8)}`,
+        total_currency: 'USD',
+        total_minor: '350',
+      },
+      items: [
+        {
+          variant_id: LATTE_V,
+          quantity: '1',
+          unit_price_minor: '350',
+          tax_minor: '0',
+        },
+      ],
+      payments: [
+        { method: 'TARJETA', amount_minor: '350', currency_code: 'USD' },
+      ],
+      inventory_consumptions: [
+        { warehouse_id: WH_A1, variant_id: LATTE_V, quantity: '1000' },
+      ],
+    });
+    assert.equal(sale.accepted, true);
+
+    await asOwner();
+    assert.equal(
+      await scalar(
+        "select count(*)::int from public.inventory_reservations where customer_order_id = $1 and status = 'ACTIVE'",
+        [order.order_id],
+      ),
+      1,
+    );
+    assert.equal(
+      await scalar(
+        'select reserved_minor from public.inventory_balances where warehouse_id = $1 and variant_id = $2',
+        [WH_A1, LATTE_V],
+      ),
+      '1000',
+    );
+  });
+});
+
+test('venta de mesa libera las reservas de líneas no vendidas', async () => {
+  await withTx(async () => {
+    const device = await newDevice(TABLE_2);
+    const order = await submitOrder(device.token, [
+      { variant_id: LATTE_V, quantity: '1' },
+      { variant_id: AREPA_V, quantity: '1' },
+    ]);
+    assert.equal(order.accepted, true);
+
+    await asOwner();
+    const diningSessionId = await scalar(
+      "select id from public.dining_sessions where dining_table_id = $1 and status = 'OPEN'",
+      [TABLE_2],
+    );
+    assert.ok(diningSessionId);
+
+    await asUser(ADMIN_A);
+    const terminal = await registerTerminal();
+    const saleId = randomUUID();
+    const sale = await rpc('rpc_confirm_sale', {
+      idempotency_key: key('sale'),
+      schema_version: 'sale.v1',
+      sale: {
+        id: saleId,
+        branch_id: BRANCH_A1,
+        terminal_id: terminal.entity_id,
+        cash_session_id: null,
+        dining_session_id: diningSessionId,
+        sale_number: `T-${saleId.slice(0, 8)}`,
+        total_currency: 'USD',
+        total_minor: '350',
+      },
+      items: [
+        {
+          variant_id: LATTE_V,
+          quantity: '1',
+          unit_price_minor: '350',
+          tax_minor: '0',
+        },
+      ],
+      payments: [
+        { method: 'TARJETA', amount_minor: '350', currency_code: 'USD' },
+      ],
+      inventory_consumptions: [
+        { warehouse_id: WH_A1, variant_id: LATTE_V, quantity: '1000' },
+      ],
+    });
+    assert.equal(sale.accepted, true);
+
+    await asOwner();
+    const states = await client.query(
+      `select variant_id, status from public.inventory_reservations
+        where customer_order_id = $1 order by variant_id`,
+      [order.order_id],
+    );
+    assert.equal(
+      states.rows.find((row) => row.variant_id === LATTE_V).status,
+      'CONSUMED',
+    );
+    assert.equal(
+      states.rows.find((row) => row.variant_id === AREPA_V).status,
+      'RELEASED',
+    );
+    assert.equal(
+      await scalar(
+        'select quantity_minor from public.inventory_balances where warehouse_id = $1 and variant_id = $2',
+        [WH_A1, LATTE_V],
+      ),
+      '4000',
+    );
+    assert.equal(
+      await scalar(
+        'select quantity_minor from public.inventory_balances where warehouse_id = $1 and variant_id = $2',
+        [WH_A1, AREPA_V],
+      ),
+      '3000',
+    );
+    for (const variant of [LATTE_V, AREPA_V]) {
+      assert.equal(
+        await scalar(
+          'select reserved_minor from public.inventory_balances where warehouse_id = $1 and variant_id = $2',
+          [WH_A1, variant],
+        ),
+        '0',
+      );
+    }
+    assert.equal(
+      await scalar(
+        `select after_json->>'reservations_consumed'
+           from public.audit_logs
+          where action = 'SALE_CONFIRMED_REMOTE' and entity_id = $1`,
+        [saleId],
+      ),
+      '1',
+    );
+    assert.equal(
+      await scalar('select status from public.dining_sessions where id = $1', [
+        diningSessionId,
+      ]),
+      'CLOSED',
+    );
+  });
+});
+
+test('estación autorizada envía y avanza su comanda; el replay es idempotente', async () => {
+  await withTx(async () => {
+    await asUser(ADMIN_A);
+    const terminal = await registerTerminal();
+    const opened = await rpc('rpc_open_dining_session', {
+      schema_version: 'dining.v1',
+      dining_table_id: TABLE_1,
+      terminal_id: terminal.entity_id,
+      idempotency_key: key('dining'),
+    });
+    assert.equal(opened.accepted, true);
+    const diningSessionId = opened.entity_id;
+
+    for (const variant of [LATTE_V, AREPA_V]) {
+      const added = await rpc('rpc_add_dining_item', {
+        schema_version: 'dining.v1',
+        dining_session_id: diningSessionId,
+        variant_id: variant,
+        quantity: '1',
+        idempotency_key: key('item'),
+      });
+      assert.equal(added.accepted, true);
+    }
+
+    await asOwner();
+    await client.query(
+      "update public.profiles set production_station = 'BAR' where id = $1",
+      [ADMIN_A],
+    );
+
+    await asUser(ADMIN_A);
+    const sendKey = key('send');
+    const send = await rpc('rpc_send_production', {
+      schema_version: 'production.v1',
+      dining_session_id: diningSessionId,
+      station: 'BAR',
+      idempotency_key: sendKey,
+    });
+    assert.equal(send.accepted, true);
+
+    const visible = await client.query(
+      'select distinct station from public.production_orders',
+    );
+    assert.deepEqual(
+      visible.rows.map((row) => row.station),
+      ['BAR'],
+    );
+
+    const replay = await rpc('rpc_send_production', {
+      schema_version: 'production.v1',
+      dining_session_id: diningSessionId,
+      station: 'BAR',
+      idempotency_key: sendKey,
+    });
+    assert.equal(replay.duplicate, true);
+    assert.equal(replay.operation_id, send.operation_id);
+
+    await asOwner();
+    const sentOrder = await scalar(
+      `select id from public.production_orders
+        where dining_session_id = $1 and station = 'BAR'
+          and customer_order_id is null`,
+      [diningSessionId],
+    );
+    assert.ok(sentOrder);
+
+    await asUser(ADMIN_A);
+    const advanced = await rpc('rpc_update_production_status', {
+      schema_version: 'production.v1',
+      production_order_id: sentOrder,
+      status: 'PREPARING',
+      idempotency_key: key('prod'),
+    });
+    assert.equal(advanced.accepted, true);
+
+    await client.query('savepoint station_denied_positive');
+    await expectReject(
+      'select public.rpc_send_production($1::jsonb)',
+      [
+        JSON.stringify({
+          schema_version: 'production.v1',
+          dining_session_id: diningSessionId,
+          station: 'KITCHEN',
+          idempotency_key: key('send'),
+        }),
+      ],
+      /FORBIDDEN/,
+    );
+    await client.query('rollback to savepoint station_denied_positive');
+
+    await asOwner();
+    await client.query(
+      "update public.profiles set production_station = 'BOTH' where id = $1",
+      [ADMIN_A],
+    );
+    await asUser(ADMIN_A);
+    const kitchenSend = await rpc('rpc_send_production', {
+      schema_version: 'production.v1',
+      dining_session_id: diningSessionId,
+      station: 'KITCHEN',
+      idempotency_key: key('send'),
+    });
+    assert.equal(kitchenSend.accepted, true);
+    const stations = await client.query(
+      'select distinct station from public.production_orders',
+    );
+    assert.deepEqual(
+      stations.rows.map((row) => row.station).sort(),
+      ['BAR', 'KITCHEN'],
+    );
   });
 });
 

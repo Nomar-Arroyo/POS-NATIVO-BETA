@@ -1,7 +1,9 @@
 # Contratos RPC
 
-Estado: **implementado** en `supabase/migrations/20261126090200_0003_commercial_rpc.sql`
-y `20261126090300_0004_customer_sync.sql`. Los clientes llaman
+Estado: **implementado** en `supabase/migrations/20261126090200_0003_commercial_rpc.sql`,
+`20261126090300_0004_customer_sync.sql` y
+`20261126090500_0005_production_station_reservations.sql`; la migración 0006
+endurece privilegios sin cambiar contratos. Los clientes llaman
 `supabase.rpc(nombre, payload)`; no hay endpoints REST propios ni Edge Functions.
 
 ## 1. Reglas comunes
@@ -12,10 +14,12 @@ y `20261126090300_0004_customer_sync.sql`. Los clientes llaman
 - Las tablets se resuelven por `session_token`; su organización, sucursal y mesa
   nunca vienen del payload.
 - Toda mutación del personal exige `idempotency_key`; el servidor devuelve el
-  recibo previo si la clave ya fue aceptada.
+  recibo previo si la clave ya fue aceptada y replica el conflicto previo si la
+  clave quedó en `CONFLICT`.
 - El servidor calcula precios y totales; los importes del cliente solo se
   comparan.
-- Las respuestas aceptadas incluyen `accepted: true` y `receipt_id`.
+- Las respuestas aceptadas incluyen `accepted: true`, `operation_id`, `entity_id`
+  y `idempotency_key`.
 - Los conflictos controlados devuelven `accepted: false`, `code` y `message`
   (no lanzan error HTTP), salvo `rpc_register_terminal` y
   `rpc_revoke_terminal`, que no capturan conflictos y los elevan como excepción
@@ -29,32 +33,35 @@ y `20261126090300_0004_customer_sync.sql`. Los clientes llaman
 {
   "accepted": true,
   "duplicate": false,
-  "receipt_id": "uuid",
-  "entity_type": "sale",
+  "operation_id": "uuid",
+  "operation_type": "confirm_sale",
   "entity_id": "uuid",
   "idempotency_key": "sale-...",
-  "schema_version": "sale.v1",
   "remote_version": 1,
-  "received_at": "2026-11-26T20:00:00Z"
+  "applied_at": "2026-11-26T20:00:00Z"
 }
 ```
+
+`duplicate` es `true` cuando la clave ya estaba aplicada; el resto de campos se
+repite igual. El `operation_type` lo fija el servidor.
 
 ### Envoltura de conflicto (rechazado controlado)
 
 ```json
 {
   "accepted": false,
-  "duplicate": false,
   "code": "PRICE_CHANGED",
   "message": "Precio vigente 350 distinto al enviado 1",
+  "operation_id": "uuid",
   "idempotency_key": "sale-..."
 }
 ```
 
 El conflicto queda en `sync_operations` con `status='CONFLICT'` y se audita como
-`SYNC_OPERATION_CONFLICT`. La clave consumida no puede reutilizarse con otro
-payload: un reintento con la misma clave y datos corregidos devuelve error de
-unicidad; se debe emitir una clave nueva.
+`SYNC_OPERATION_CONFLICT`. Reintentar la misma clave devuelve exactamente el
+mismo conflicto (`accepted:false`, mismo `code`), nunca un error de unicidad. La
+operación local debe conservarse para reconciliación y reenviarse con una clave
+nueva.
 
 ## 2. Personal autenticado
 
@@ -68,8 +75,8 @@ unicidad; se debe emitir una clave nueva.
 | `rpc_close_cash_session` | `cash.manage` | `cash_session_id`, `closing_minor: { usd_minor }`, `schema_version: cash.v1`, `idempotency_key` | Cierra caja y calcula diferencia |
 | `rpc_open_dining_session` | `tables.manage` | `dining_table_id`, `terminal_id`, `idempotency_key` | Abre sesión de mesa |
 | `rpc_add_dining_item` | `tables.manage` | `dining_session_id`, `variant_id`, `quantity`, `notes?`, `idempotency_key` | Agrega línea con precio de servidor |
-| `rpc_send_production` | `production.send` | `dining_session_id`, `station KITCHEN|BAR`, `idempotency_key` | Encomienda líneas y crea orden |
-| `rpc_update_production_status` | `production.update` | `production_order_id`, `status`, `idempotency_key` | Transición validada de la orden |
+| `rpc_send_production` | `production.send` + estación | `dining_session_id`, `station KITCHEN|BAR`, `idempotency_key` | Encomienda líneas y crea orden |
+| `rpc_update_production_status` | `production.update` + estación | `production_order_id`, `status`, `idempotency_key` | Transición validada de la orden |
 | `rpc_create_pairing_code` | `devices.manage` | `branch_id`, `dining_table_id`, `ttl_minutes? 2-15`, `idempotency_key?` | Código de 8 dígitos, válido una vez |
 | `rpc_revoke_customer_device` | `devices.manage` | `device_id`, `reason?`, `idempotency_key` | Revoca tablet, sesiones y vinculación |
 | `rpc_pull_catalog` | `catalog.read` o `sync.read` | `since?` ISO 8601 | Cambios de catálogo, mesas y tasas con cursor |
@@ -107,7 +114,8 @@ unicidad; se debe emitir una clave nueva.
 Validaciones en orden: `schema_version`, terminal activo de la sucursal,
 líneas no vacías, variante activa/no sintética, moneda, precio de catálogo,
 total de líneas, pagos no vacíos, moneda y suma de pagos, caja abierta del
-terminal, sesión de mesa abierta, stock disponible con `FOR UPDATE`. Códigos:
+terminal, sesión de mesa abierta, stock disponible con `FOR UPDATE`
+(`quantity_minor - reserved_minor + reservas_activas_de_la_sesión`). Códigos:
 `SCHEMA_VERSION_UNSUPPORTED`, `TERMINAL_INVALID`, `ITEM_INVALID`,
 `CURRENCY_MISMATCH`, `PRICE_CHANGED`, `TOTAL_MISMATCH`, `PAYMENT_INVALID`,
 `PAYMENT_CURRENCY_MISMATCH`, `PAYMENT_MISMATCH`, `CASH_SESSION_INVALID`,
@@ -117,6 +125,13 @@ Efectos: crea `sales` (`paid`), `sale_items`, `payments`, movimientos de
 inventario `SALE_CONSUMPTION`, movimiento de caja si hay pago en efectivo,
 cierra la sesión de mesa y libera la mesa, audita `SALE_CONFIRMED_REMOTE` y
 registra recibo.
+
+Reservas de mesa: si la venta referencia una `dining_session_id`, cada reserva
+`ACTIVE` de los pedidos de cliente de esa sesión pasa a `CONSUMED` para las
+variantes consumidas y se descuenta de `reserved_minor`; las reservas activas
+restantes de la sesión se liberan (`RELEASED`). Una venta directa no toca las
+reservas de otras mesas. El número de reservas consumidas queda en la auditoría
+(`reservations_consumed`).
 
 ## 4. Caja y producción
 
@@ -129,6 +144,10 @@ registra recibo.
   DELIVERED` y `CANCELLED` desde estados no entregados. La tabla
   `production_orders` dispara la sincronización del estado agregado del pedido
   de cliente.
+- `profiles.production_station` (`KITCHEN`, `BAR`, `BOTH`) acota el envío y la
+  actualización de comandas: un perfil `KITCHEN` no puede enviar ni cambiar una
+  comanda `BAR`. La violación eleva `FORBIDDEN` (no es un conflicto comercial).
+  Los perfiles `BOTH` mantienen acceso completo.
 
 ## 5. Tablets de cliente (rol `anon`)
 

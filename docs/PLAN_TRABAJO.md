@@ -41,7 +41,7 @@ Verificado el 26 de noviembre de 2026 ejecutando analyze y pruebas locales.
 | `apps/desktop` | Funcional en desarrollo | analyze limpio, 8 pruebas |
 | `apps/mobile` | Scaffold | analyze limpio, 1 prueba |
 | CI | Paquetes, Desktop, Mobile y backend | `.github/workflows/ci.yml` (backend pendiente de primera ejecución en GitHub) |
-| Backend | Implementado y probado localmente | 4 migraciones, 19 pruebas en PostgreSQL 19; no desplegado a Supabase |
+| Backend | Implementado y probado localmente | 6 migraciones, 25 pruebas; no desplegado a Supabase |
 
 Separación que debe mantenerse en la comunicación del proyecto:
 
@@ -91,12 +91,12 @@ identidad de dispositivo, vinculación y permisos efectivos.
 | ID | Tarea | Responsable | Depende de | Criterios de aceptación | Estado |
 | --- | --- | --- | --- | --- | --- |
 | E-01 | Matriz de CI para paquetes Dart, Desktop y Mobile | Ambos | — | Workflow corre en PR y push; analyze, tests y builds de la matriz en verde | Hecho |
-| E-02 | Fail-closed en autorización local | Ambos | E-03 | Sin workspace, sin sesión, sesión finalizada, perfil inactivo o permiso ausente → `StateError`; identidad de venta validada siempre | Pendiente |
-| E-03 | Migración v6: expiración y revocación de sesiones | Compañero | — | `expires_at` y `revoked_at` en sesiones; login fija expiración; migración probada sobre v5 | Pendiente |
-| E-04 | Contrato versionado de outbox de venta | Ambos | K-01 | Payload incluye cabecera, líneas, pagos, snapshots de tasa, inventario, caja, mesa, usuario, terminal e idempotency key | Pendiente |
-| E-05 | Validación estricta de recibos en `SyncEngine` | Ambos | E-04 | Solo pasa a `SYNCED` si `accepted == true` y coinciden `operationId`, `entity` e `idempotencyKey` | Pendiente |
-| E-06 | Persistencia del motor de sincronización | Ambos | E-05 | Estados, recibos, cursores, reintentos y conflictos sobreviven al reinicio | Pendiente |
-| E-07 | Pruebas negativas de autorización | Ambos | E-02 | Un test por caso de denegación: sin workspace, sin sesión, expirada, revocada, perfil inactivo, permiso ausente | Pendiente |
+| E-02 | Fail-closed en autorización local | Ambos | E-03 | Sin workspace, sin sesión, sesión finalizada, perfil inactivo o permiso ausente → `StateError`; identidad de venta validada siempre | Hecho |
+| E-03 | Migración v6: expiración y revocación de sesiones | Compañero | — | `expires_at` y `revoked_at` en sesiones; login fija expiración; migración probada sobre v5 | Hecho |
+| E-04 | Contrato versionado de outbox de venta | Ambos | K-01 | Payload incluye cabecera, líneas, pagos, snapshots de tasa, inventario, caja, mesa, usuario, terminal e idempotency key | Hecho |
+| E-05 | Validación estricta de recibos en `SyncEngine` | Ambos | E-04 | Solo pasa a `SYNCED` si `accepted == true` y coinciden `operationId`, `entity` e `idempotencyKey` | Hecho |
+| E-06 | Persistencia del motor de sincronización | Ambos | E-05 | Estados, recibos, cursores, reintentos y conflictos sobreviven al reinicio | Hecho (snapshot del Desktop) |
+| E-07 | Pruebas negativas de autorización | Ambos | E-02 | Un test por caso de denegación: sin workspace, sin sesión, expirada, revocada, perfil inactivo, permiso ausente | Hecho |
 | E-08 | Separar SQL de la UI y preparar capas | Ambos | — | Ningún widget ejecuta SQL; `audit_screen` usa método del paquete; propuesta `domain`/`application` aprobada | Pendiente |
 
 Notas de ejecución de E-02/E-03: cambiar el contrato de autorización exige
@@ -124,7 +124,7 @@ Los contratos se aprueban antes de escribir RPC o UI que dependa de ellos.
 | B-03 | RLS por organización y sucursal | Compañero | B-02 | Pruebas por rol, organización cruzada, sucursal cruzada y usuario anónimo | Hecho |
 | B-04 | RPC de venta, caja e inventario | Compañero | B-01, K-01 | Aplicación atómica; idempotencia por clave; recibo correlacionado | Hecho |
 | B-05 | RPC de mesas y comandas | Compañero | B-04 | Estados de sesión y comanda; rollback ante fallo | Hecho |
-| B-06 | Transporte de sincronización | Compañero | B-04, K-04 | La outbox se procesa con reintentos; duplicados rechazados; cursores incrementales | En curso (backend listo; transporte Desktop pendiente) |
+| B-06 | Transporte de sincronización | Compañero | B-04, K-04 | La outbox se procesa con reintentos; duplicados rechazados; cursores incrementales | Hecho para `confirm_sale`; resto de operaciones pendiente |
 | B-07 | Dispositivos, pairing y sesiones | Compañero | B-02, K-03 | Código de un solo uso, expiración breve, revocación, credencial de alcance mínimo | Hecho |
 | B-08 | Pedidos de cliente | Compañero | B-07, K-02 | Pedido creado atómicamente; precio y disponibilidad validados en servidor; enrutamiento a cocina/barra | Hecho |
 | B-09 | Realtime y notificaciones | Compañero | B-08 | Estado de pedido observable por tablet sin acceso a datos administrativos | Pendiente (se usa sondeo por RPC) |
@@ -195,11 +195,11 @@ de alcance escondidos en el PR.
 
 | Tema | Pregunta | Responsable | Relacionado |
 | --- | --- | --- | --- |
-| Inventario | ¿La reserva ocurre al enviar, al aceptar o al iniciar preparación? Expiración y liberación | Ambos | K-02, B-08 |
+| Inventario | Resuelto: se reserva al aceptar el pedido de tablet, expira en 30 min y se consume o libera al confirmar la venta de la mesa | Ambos | K-02, B-08 |
 | Vuelto | Reglas de vuelto en pagos mixtos y moneda | Ambos | K-05 |
 | IGTF / impuestos | Habilitación sujeta a revisión legal | Compañero | K-05 |
 | Offline gerencial | ¿Qué operaciones permite el modo gerencial sin red? | Ambos | M-02 |
-| Sesión local | Duración de sesión de terminal y de tablet | Ambos | E-03, K-03 |
+| Sesión local | Resuelto para Desktop: 8 h con expiración y revocación; tablet renovable 8 h | Ambos | E-03, K-03 |
 | Cursores | Estrategia incremental por entidad y retención | Compañero | K-04 |
 | Capas | Crear `domain`, `application` y `data_remote` según auditoría | Ambos | E-08 |
 
@@ -235,3 +235,23 @@ de alcance escondidos en el PR.
   `package:flutter/material.dart`; se fija Flutter 3.47.7 para reproducir la
   versión validada localmente. La matriz completa queda pendiente de una nueva
   ejecución del workflow.
+- **2026-11-27** · Integración del POS: transporte RPC del Desktop
+  (`SupabaseConfig`, `SupabaseRpcInvoker`, `SupabaseSyncTransport`,
+  `DesktopSyncService`), recepción estricta de recibos, snapshot del motor con
+  cuarentena de archivos corruptos, sesiones locales fail-closed con expiración
+  y corrección del reintento de errores terminales. Backend: migración 0005 con
+  estación de producción por perfil, RLS por estación, consumo/liberación de
+  reservas al confirmar venta y replay de conflictos. E-02 a E-07 y B-06
+  (confirm_sale) quedan Hechos; B-09, M-01 a M-09 y el despliegue Supabase
+  siguen pendientes.
+- **2026-11-27** · Verificación ampliada en PostgreSQL 17: suite backend
+  25/25 en dos ejecuciones consecutivas; pruebas extra de idempotencia
+  concurrente, liberación de reservas sobrantes, envío/estado positivo por
+  estación y replay de `rpc_send_production`. La prueba de privilegios detectó
+  que `anon` podía invocar helpers internos de `app` (incluido
+  `app.record_receipt`); la migración 0006 revoca `EXECUTE` de `PUBLIC` en
+  `app.*` y `USAGE` de `anon`. Se añaden tres pruebas permanentes a la suite:
+  privilegios de `app.*`, liberación de reservas no vendidas y flujo positivo
+  de estación con replay. Paquetes, Desktop, Mobile y Beta en verde localmente;
+  la suite de 25 pruebas con 0005/0006 aún no se ha ejecutado en GitHub Actions
+  (el último run verde fue 19/19 en PostgreSQL 16 con 0001–0004).

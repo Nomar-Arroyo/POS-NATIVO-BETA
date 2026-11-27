@@ -9,11 +9,12 @@ class LocalOutbox {
 
   List<OutboxEntry> pending({int limit = 100}) {
     final rows = database.select(
-      'SELECT id, entity_id, idempotency_key, operation_type, '
+      'SELECT id, entity_id, idempotency_key, operation_type, base_version, '
       'sync_status, attempt_count, payload_json '
       'FROM sync_outbox '
-      'WHERE sync_status IN (?, ?) '
-      'AND (next_attempt_at IS NULL OR next_attempt_at <= ?) '
+      'WHERE sync_status = ? '
+      'OR (sync_status = ? AND next_attempt_at IS NOT NULL '
+      'AND next_attempt_at <= ?) '
       'ORDER BY created_at ASC LIMIT ?',
       ['PENDING', 'ERROR', DateTime.now().toUtc().toIso8601String(), limit],
     );
@@ -24,6 +25,7 @@ class LocalOutbox {
             entityId: row['entity_id'] as String,
             idempotencyKey: row['idempotency_key'] as String,
             operationType: row['operation_type'] as String,
+            baseVersion: row['base_version'] as int,
             status: row['sync_status'] as String,
             attemptCount: row['attempt_count'] as int,
             payloadJson: row['payload_json'] as String,
@@ -39,6 +41,7 @@ class LocalOutbox {
     required String operationType,
     required String code,
     required String message,
+    bool retryable = true,
   }) {
     final now = DateTime.now().toUtc().toIso8601String();
     final attemptRows = database.select(
@@ -54,13 +57,59 @@ class LocalOutbox {
       'updated_at = ? WHERE id = ?',
       [
         'ERROR',
-        _nextAttemptAt(attemptCount).toIso8601String(),
+        retryable ? _nextAttemptAt(attemptCount).toIso8601String() : null,
         code,
         message,
         now,
         outboxId
       ],
     );
+    _insertError(
+      outboxId: outboxId,
+      organizationId: organizationId,
+      terminalId: terminalId,
+      operationType: operationType,
+      code: code,
+      message: message,
+      now: now,
+    );
+  }
+
+  void markConflict({
+    required String outboxId,
+    required String organizationId,
+    required String terminalId,
+    required String operationType,
+    required String code,
+    required String message,
+  }) {
+    final now = DateTime.now().toUtc().toIso8601String();
+    database.execute(
+      'UPDATE sync_outbox SET sync_status = ?, attempt_count = attempt_count + 1, '
+      'next_attempt_at = NULL, last_error_code = ?, last_error_message = ?, '
+      'updated_at = ? WHERE id = ?',
+      ['CONFLICT', code, message, now, outboxId],
+    );
+    _insertError(
+      outboxId: outboxId,
+      organizationId: organizationId,
+      terminalId: terminalId,
+      operationType: operationType,
+      code: code,
+      message: message,
+      now: now,
+    );
+  }
+
+  void _insertError({
+    required String outboxId,
+    required String organizationId,
+    required String terminalId,
+    required String operationType,
+    required String code,
+    required String message,
+    required String now,
+  }) {
     database.execute(
       'INSERT INTO sync_errors(id, outbox_id, organization_id, terminal_id, '
       'operation_type, error_code, error_message, occurred_at) '
@@ -78,25 +127,39 @@ class LocalOutbox {
     );
   }
 
-  void markSynced({
+  bool markSynced({
     required String outboxId,
     required String idempotencyKey,
+    required String entityId,
+    required String operationType,
     required String organizationId,
     required String terminalId,
+    int? remoteVersion,
   }) {
+    final row = database.select(
+      'SELECT entity_id, operation_type, idempotency_key, sync_status '
+      'FROM sync_outbox WHERE id = ?',
+      [outboxId],
+    );
+    if (row.isEmpty) return false;
+    if (row.first['idempotency_key'] != idempotencyKey ||
+        row.first['entity_id'] != entityId ||
+        row.first['operation_type'] != operationType) {
+      throw StateError(
+        'Receipt does not correlate with the outbox operation',
+      );
+    }
+    if (row.first['sync_status'] == 'CONFLICT') {
+      throw StateError(
+        'A conflicted operation requires reconciliation before it can sync',
+      );
+    }
     final now = DateTime.now().toUtc().toIso8601String();
     database.execute(
       'UPDATE sync_outbox SET sync_status = ?, last_error_code = NULL, '
       'last_error_message = NULL, updated_at = ? WHERE id = ?',
       ['SYNCED', now, outboxId],
     );
-    final row = database.select(
-      'SELECT entity_id, operation_type FROM sync_outbox WHERE id = ?',
-      [outboxId],
-    );
-    if (row.isEmpty) return;
-    final entityId = row.first['entity_id'] as String;
-    final operationType = row.first['operation_type'] as String;
     if (operationType == 'confirm_sale') {
       database.execute(
         'UPDATE sales SET sync_status = ?, updated_at = ? WHERE id = ?',
@@ -105,8 +168,9 @@ class LocalOutbox {
     }
     database.execute(
       'INSERT OR IGNORE INTO sync_receipts(id, organization_id, terminal_id, '
-      'idempotency_key, operation_type, entity_id, result_status, received_at) '
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      'idempotency_key, operation_type, entity_id, result_status, '
+      'remote_version, received_at) '
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [
         'receipt-$idempotencyKey',
         organizationId,
@@ -115,9 +179,11 @@ class LocalOutbox {
         operationType,
         entityId,
         'accepted',
+        remoteVersion,
         now,
       ],
     );
+    return true;
   }
 
   void setCursor({

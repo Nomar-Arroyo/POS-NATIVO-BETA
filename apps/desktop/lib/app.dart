@@ -57,7 +57,7 @@ class _AmalfiDesktopAppState extends State<AmalfiDesktopApp> {
       final database = await LocalDatabase.openDemoInMemory();
       database.initializeDemoWorkspace();
       final workspace = database.localWorkspace!;
-      final sessionId = database.startDemoProfileSession(workspace.profileId);
+      final sessionId = database.activeProfileSessionId!;
       if (!mounted) {
         database.close();
         return;

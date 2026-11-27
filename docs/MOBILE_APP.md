@@ -38,5 +38,7 @@ pedidos, pairing ni sincronización implementados.
 ## Preparación
 
 La aplicación comparte recursos visuales y se mantiene separada de los datos
-locales del Desktop. Antes de integrar datos remotos deben aprobarse el esquema,
-los contratos de [API](API_CONTRACTS.md), la autorización y las pruebas RLS.
+locales del Desktop. Los contratos de [API](API_CONTRACTS.md), la autorización y
+las pruebas RLS ya existen en el backend; el scaffold móvil todavía no consume
+ninguno. La implementación de los modos gerencial y de cliente sigue en las
+tareas M-01 a M-09 de [PLAN_TRABAJO.md](PLAN_TRABAJO.md).

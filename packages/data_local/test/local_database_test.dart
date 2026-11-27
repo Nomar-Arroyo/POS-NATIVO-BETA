@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:data_local/data_local.dart';
@@ -12,35 +13,78 @@ const variantId = 'variant-test';
 
 Future<LocalDatabase> seededDatabase() async {
   final database = await LocalDatabase.openInMemory();
-  database.seedOrganization(
-    organizationId: organizationId,
-    branchId: branchId,
-    terminalId: terminalId,
-    profileId: profileId,
+  database.createLocalWorkspace(
+    const LocalWorkspaceInput(
+      organizationId: organizationId,
+      organizationName: 'Test Organization',
+      branchId: branchId,
+      branchName: 'Test Branch',
+      terminalId: terminalId,
+      terminalName: 'Terminal 1',
+      profileId: profileId,
+      profileName: 'Administrator',
+      profilePin: '1234',
+      warehouseId: warehouseId,
+      warehouseName: 'Main Warehouse',
+      cashRegisterId: 'seeded-register',
+      cashRegisterName: 'Register 1',
+    ),
   );
-  database.seedWarehouse(
-    organizationId: organizationId,
-    branchId: branchId,
-    warehouseId: warehouseId,
+  signIn(database);
+  database.database.execute(
+    'INSERT INTO cash_sessions(id, organization_id, cash_register_id, '
+    'terminal_id, profile_id, opening_minor, status, opened_at, idempotency_key) '
+    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [
+      'seeded-cash-session',
+      organizationId,
+      'seeded-register',
+      terminalId,
+      profileId,
+      '{"USD":"0"}',
+      'open',
+      DateTime.now().toUtc().toIso8601String(),
+      'seeded-open-cash',
+    ],
   );
   database.seedVariant(
     organizationId: organizationId,
     variantId: variantId,
   );
+  // Reset setup side effects so each test asserts only its own transaction.
+  database.database.execute(
+    "DELETE FROM sync_outbox WHERE operation_type = 'configure_local_workspace'",
+  );
+  database.database.execute(
+    "DELETE FROM audit_logs WHERE action IN "
+    "('LOCAL_WORKSPACE_CONFIGURED', 'LOCAL_PROFILE_SESSION_STARTED')",
+  );
   return database;
+}
+
+String signIn(LocalDatabase database) {
+  final sessionId = database.authenticateLocalProfile(
+    profileId: profileId,
+    pin: '1234',
+  );
+  expect(sessionId, isNotNull, reason: 'The test profile must authenticate');
+  return sessionId!;
 }
 
 LocalSaleInput sale({
   required String id,
   required String idempotencyKey,
   required String consumptionQuantity,
+  String? saleTerminalId,
+  String? cashSessionId = 'seeded-cash-session',
 }) =>
     LocalSaleInput(
       id: id,
       organizationId: organizationId,
       branchId: branchId,
-      terminalId: terminalId,
+      terminalId: saleTerminalId ?? terminalId,
       profileId: profileId,
+      cashSessionId: cashSessionId,
       idempotencyKey: idempotencyKey,
       saleNumber: 'TEST-001',
       totalCurrency: 'USD',
@@ -75,8 +119,8 @@ void main() {
   group('SQLite migrations', () {
     test('applies migration once and enables foreign keys', () async {
       final database = await LocalDatabase.openInMemory();
-      expect(database.migrationCount, 5);
-      expect(database.userVersion, 5);
+      expect(database.migrationCount, 6);
+      expect(database.userVersion, 6);
       final foreignKeys = database.database
           .select('PRAGMA foreign_keys')
           .first
@@ -93,12 +137,12 @@ void main() {
       addTearDown(() => directory.delete(recursive: true));
 
       final first = await LocalDatabase.open(path);
-      expect(first.migrationCount, 5);
+      expect(first.migrationCount, 6);
       first.close();
 
       final reopened = await LocalDatabase.open(path);
-      expect(reopened.migrationCount, 5);
-      expect(reopened.userVersion, 5);
+      expect(reopened.migrationCount, 6);
+      expect(reopened.userVersion, 6);
       reopened.close();
     });
   });
@@ -125,6 +169,7 @@ void main() {
         ),
       );
 
+      signIn(database);
       final credential = database.database
           .select('SELECT pin_salt, pin_hash FROM profiles WHERE id = ?', [
         profileId,
@@ -247,6 +292,7 @@ void main() {
         ),
       );
 
+      signIn(database);
       expect(database.loadSyntheticDemoCatalog(), 18);
       expect(database.loadSyntheticDemoCatalog(), 0);
       final products = database.getCatalogProducts(offlineOnly: false);
@@ -353,6 +399,7 @@ void main() {
           cashRegisterName: 'Register 1',
         ),
       );
+      signIn(database);
       database.createLocalProduct(
         const LocalProductInput(
           productId: 'adjustment-product',
@@ -443,6 +490,7 @@ void main() {
           cashRegisterName: 'Register 1',
         ),
       );
+      signIn(database);
       expect(database.localWorkspace?.terminalId, terminalId);
 
       database.createLocalProduct(
@@ -569,6 +617,7 @@ void main() {
           cashRegisterName: 'Register 1',
         ),
       );
+      signIn(database);
       database.createLocalProduct(
         const LocalProductInput(
           productId: 'product-offline-disabled',
@@ -806,12 +855,27 @@ void main() {
       database.outbox.markSynced(
         outboxId: pending.first.id,
         idempotencyKey: pending.first.idempotencyKey,
+        entityId: 'sale-sync',
+        operationType: 'confirm_sale',
         organizationId: organizationId,
         terminalId: terminalId,
+        remoteVersion: 1,
       );
       expect(database.getSyncStatus(saleId), 'SYNCED');
       expect(database.tableCount('sync_receipts'), 1);
       expect(database.outbox.pending(), isEmpty);
+
+      expect(
+        () => database.outbox.markSynced(
+          outboxId: pending.first.id,
+          idempotencyKey: pending.first.idempotencyKey,
+          entityId: 'other-sale',
+          operationType: 'confirm_sale',
+          organizationId: organizationId,
+          terminalId: terminalId,
+        ),
+        throwsStateError,
+      );
 
       database.outbox.setCursor(
         organizationId: organizationId,
@@ -826,6 +890,45 @@ void main() {
         ),
         '2026-11-24T12:00:00Z|sale-sync',
       );
+    });
+
+    test('retains conflicts and stops retrying them', () async {
+      final database = await seededDatabase();
+      addTearDown(database.close);
+      database.setInventoryBalance(
+        organizationId: organizationId,
+        warehouseId: warehouseId,
+        variantId: variantId,
+        quantityMinor: '5',
+      );
+      database.confirmSale(
+        sale(
+          id: 'sale-conflict',
+          idempotencyKey: 'key-conflict',
+          consumptionQuantity: '1',
+        ),
+      );
+      final pending = database.outbox.pending().single;
+      database.outbox.markConflict(
+        outboxId: pending.id,
+        organizationId: organizationId,
+        terminalId: terminalId,
+        operationType: 'confirm_sale',
+        code: 'PRICE_CHANGED',
+        message: 'Remote price differs from the local snapshot',
+      );
+
+      final row = database.database.select(
+        'SELECT sync_status, next_attempt_at, last_error_code '
+        'FROM sync_outbox WHERE id = ?',
+        [pending.id],
+      ).single;
+      expect(row['sync_status'], 'CONFLICT');
+      expect(row['next_attempt_at'], isNull);
+      expect(row['last_error_code'], 'PRICE_CHANGED');
+      expect(database.tableCount('sync_errors'), 1);
+      expect(database.outbox.pending(), isEmpty);
+      expect(database.getSyncStatus('sale-conflict'), 'PENDING');
     });
   });
 
@@ -851,6 +954,7 @@ void main() {
           cashRegisterName: 'Register 1',
         ),
       );
+      signIn(database);
       database.createLocalProduct(
         const LocalProductInput(
           productId: 'venue-product',
@@ -987,6 +1091,7 @@ void main() {
           cashRegisterName: 'Register 1',
         ),
       );
+      signIn(database);
       database.createLocalProduct(
         const LocalProductInput(
           productId: 'bar-product',
@@ -1023,6 +1128,212 @@ void main() {
       );
       database.closeEmptyDiningSession(session.id);
       expect(database.getDiningTables().single.status, 'FREE');
+    });
+  });
+
+  group('fail-closed authorization', () {
+    test('rejects operations when no local session is active', () async {
+      final database = await LocalDatabase.openInMemory();
+      addTearDown(database.close);
+      database.createLocalWorkspace(
+        const LocalWorkspaceInput(
+          organizationId: organizationId,
+          organizationName: 'Test Organization',
+          branchId: branchId,
+          branchName: 'Test Branch',
+          terminalId: terminalId,
+          terminalName: 'Terminal 1',
+          profileId: profileId,
+          profileName: 'Operator',
+          profilePin: '1234',
+          warehouseId: warehouseId,
+          warehouseName: 'Main Warehouse',
+          cashRegisterId: 'no-session-register',
+          cashRegisterName: 'Register 1',
+        ),
+      );
+
+      expect(database.activeProfileSessionId, isNull);
+      expect(
+        () => database.confirmSale(
+          sale(
+            id: 'no-session-sale',
+            idempotencyKey: 'no-session-sale',
+            consumptionQuantity: '1',
+          ),
+        ),
+        throwsStateError,
+      );
+      expect(
+        () => database.adjustLocalInventory(
+          variantId: variantId,
+          quantityDelta: '1',
+          reason: 'no session',
+        ),
+        throwsStateError,
+      );
+      expect(database.tableCount('sales'), 0);
+      expect(
+        database.outbox.pending().where(
+              (entry) => entry.operationType == 'confirm_sale',
+            ),
+        isEmpty,
+      );
+    });
+
+    test('rejects operations after the session is revoked', () async {
+      final database = await seededDatabase();
+      addTearDown(database.close);
+      expect(database.activeProfileSessionId, isNotNull);
+
+      expect(database.revokeLocalProfileSessions(), 1);
+      expect(database.activeProfileSessionId, isNull);
+      expect(
+        () => database.confirmSale(
+          sale(
+            id: 'revoked-sale',
+            idempotencyKey: 'revoked-sale',
+            consumptionQuantity: '1',
+          ),
+        ),
+        throwsStateError,
+      );
+    });
+
+    test('rejects operations after the session expires', () async {
+      final database = await seededDatabase();
+      addTearDown(database.close);
+      final sessionId = database.activeProfileSessionId!;
+      database.database.execute(
+        'UPDATE local_profile_sessions SET expires_at = ? WHERE id = ?',
+        [
+          DateTime.now()
+              .toUtc()
+              .subtract(const Duration(minutes: 1))
+              .toIso8601String(),
+          sessionId,
+        ],
+      );
+
+      expect(database.activeProfileSessionId, isNull);
+      expect(
+        () => database.adjustLocalInventory(
+          variantId: variantId,
+          quantityDelta: '1',
+          reason: 'expired session',
+        ),
+        throwsStateError,
+      );
+    });
+
+    test('rejects sales for another terminal or without a cash session',
+        () async {
+      final database = await seededDatabase();
+      addTearDown(database.close);
+      database.setInventoryBalance(
+        organizationId: organizationId,
+        warehouseId: warehouseId,
+        variantId: variantId,
+        quantityMinor: '5',
+      );
+
+      expect(
+        () => database.confirmSale(
+          sale(
+            id: 'foreign-terminal-sale',
+            idempotencyKey: 'foreign-terminal-sale',
+            consumptionQuantity: '1',
+            saleTerminalId: 'other-terminal',
+          ),
+        ),
+        throwsA(
+          isA<LocalSaleConflictException>().having(
+            (error) => error.code,
+            'code',
+            'WORKSPACE_MISMATCH',
+          ),
+        ),
+      );
+      expect(
+        () => database.confirmSale(
+          sale(
+            id: 'no-cash-sale',
+            idempotencyKey: 'no-cash-sale',
+            consumptionQuantity: '1',
+            cashSessionId: null,
+          ),
+        ),
+        throwsA(
+          isA<LocalSaleConflictException>().having(
+            (error) => error.code,
+            'code',
+            'CASH_SESSION_REQUIRED',
+          ),
+        ),
+      );
+      expect(database.tableCount('sales'), 0);
+    });
+  });
+
+  group('sale outbox payload', () {
+    test('queues the complete sale.v1 contract', () async {
+      final database = await seededDatabase();
+      addTearDown(database.close);
+      database.setInventoryBalance(
+        organizationId: organizationId,
+        warehouseId: warehouseId,
+        variantId: variantId,
+        quantityMinor: '5',
+      );
+
+      database.confirmSale(
+        sale(
+          id: 'sale-payload',
+          idempotencyKey: 'key-payload',
+          consumptionQuantity: '2',
+        ),
+      );
+
+      final entry = database.outbox.pending().single;
+      expect(entry.operationType, 'confirm_sale');
+      final payload = jsonDecode(entry.payloadJson) as Map<String, dynamic>;
+      expect(payload['schema_version'], 'sale.v1');
+      expect(payload['idempotency_key'], 'key-payload');
+
+      final saleJson = payload['sale'] as Map<String, dynamic>;
+      expect(saleJson['id'], 'sale-payload');
+      expect(saleJson['sale_number'], 'TEST-001');
+      expect(saleJson['branch_id'], branchId);
+      expect(saleJson['terminal_id'], terminalId);
+      expect(saleJson['profile_id'], profileId);
+      expect(saleJson['cash_session_id'], 'seeded-cash-session');
+      expect(saleJson['total_currency'], 'USD');
+      expect(saleJson['total_minor'], 1000);
+
+      final items = payload['items'] as List<dynamic>;
+      expect(items, hasLength(1));
+      final item = items.single as Map<String, dynamic>;
+      expect(item['id'], isNotNull);
+      expect(item['variant_id'], variantId);
+      expect(item['quantity'], 1);
+      expect(item['unit_price_minor'], 1000);
+      expect(item['tax_minor'], 0);
+
+      final payments = payload['payments'] as List<dynamic>;
+      expect(payments, hasLength(1));
+      final payment = payments.single as Map<String, dynamic>;
+      expect(payment['id'], isNotNull);
+      expect(payment['method'], 'EFECTIVO USD');
+      expect(payment['amount_minor'], 1000);
+      expect(payment['currency_code'], 'USD');
+      expect(payment['original_currency_code'], 'USD');
+
+      final consumptions = payload['inventory_consumptions'] as List<dynamic>;
+      expect(consumptions, hasLength(1));
+      final consumption = consumptions.single as Map<String, dynamic>;
+      expect(consumption['warehouse_id'], warehouseId);
+      expect(consumption['variant_id'], variantId);
+      expect(consumption['quantity'], 2);
     });
   });
 }

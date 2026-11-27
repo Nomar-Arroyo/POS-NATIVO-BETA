@@ -102,6 +102,7 @@ class OutboxEntry {
     required this.entityId,
     required this.idempotencyKey,
     required this.operationType,
+    required this.baseVersion,
     required this.status,
     required this.attemptCount,
     required this.payloadJson,
@@ -111,6 +112,7 @@ class OutboxEntry {
   final String entityId;
   final String idempotencyKey;
   final String operationType;
+  final int baseVersion;
   final String status;
   final int attemptCount;
   final String payloadJson;

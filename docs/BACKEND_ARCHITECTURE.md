@@ -18,7 +18,7 @@ fuente de verdad son las migraciones de `supabase/migrations/`.
 - `supabase/migrations/`: esquema, RLS/RPC y evolución versionada.
 - `supabase/seed/demo.sql`: datos sintéticos idempotentes para desarrollo.
 - `supabase/tests/bootstrap.sql`: simulación local de `auth` para PostgreSQL.
-- `supabase/tests/backend.test.mjs`: 19 pruebas de integración y seguridad.
+- `supabase/tests/backend.test.mjs`: 25 pruebas de integración y seguridad.
 - `supabase/functions/`: reservado; no se usa actualmente.
 
 ## Límites de confianza
@@ -40,13 +40,13 @@ pendiente por error de red o conflicto.
 
 | Área | Estado |
 | --- | --- |
-| Esquema y migraciones | Implementado (0001–0004) |
+| Esquema y migraciones | Implementado (0001–0006) |
 | Auth, roles, permisos y RLS | Implementado y probado |
 | Ventas, caja, inventario y salón | Implementado y probado |
 | Pairing, tablets, menú y pedidos | Implementado y probado |
-| Descarga incremental | Implementado y probado |
+| Descarga incremental | Backend implementado; aplicación en Desktop pendiente |
 | Realtime / notificaciones push | No implementado |
-| Transporte remoto en Desktop | No implementado |
+| Transporte remoto en Desktop | Implementado para `confirm_sale`; resto de outbox pendiente |
 | Despliegue Supabase | Pendiente de acceso y aprobación |
 
 ## Decisiones pendientes

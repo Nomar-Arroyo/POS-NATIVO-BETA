@@ -62,6 +62,9 @@ pedido (`CURRENCY_MISMATCH`).
   alcanza, todo el pedido se revierte con `INSUFFICIENT_STOCK`.
 - Al cancelar se liberan reservas, se registran movimientos `RELEASE` y se
   cancelan comandas y líneas.
+- Al confirmar la venta de la mesa desde el POS, las reservas `ACTIVE` de sus
+  pedidos pasan a `CONSUMED` (o `RELEASED` si no se consumió esa variante), de
+  modo que no quede stock retenido ni se libere dos veces.
 - Al cambiar el estado de una orden de producción, un trigger agrega el estado a
   `customer_orders`: `PREPARING`, `READY`, `DELIVERED` o `CANCELLED`.
 - Repetir la misma `idempotency_key` devuelve el mismo pedido; no duplica

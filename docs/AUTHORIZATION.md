@@ -35,6 +35,13 @@ servidor recalcula permisos en cada llamada.
 | `issue_device_session` / `resolve_device` | Sesión y alcance de tablet |
 | `write_audit` | Auditoría con actor, terminal y organización actuales |
 
+Todos estos helpers son internos. La migración 0006 revoca `EXECUTE` de
+`PUBLIC` en el esquema `app`, retira `USAGE` a `anon` y deja `ALTER DEFAULT
+PRIVILEGES` sin `EXECUTE` para funciones futuras. Solo `authenticated` conserva
+los grants explícitos que necesitan las políticas RLS; las RPC `SECURITY
+DEFINER` los invocan como owner. Prueba: “helpers internos de app no son
+ejecutables por roles de cliente”.
+
 ## 3. Permisos
 
 22 códigos: `org.read`, `settings.read`, `settings.manage`, `profiles.read`,
@@ -88,6 +95,22 @@ sucursales listadas. Esto afecta lectura, RPC de caja/salón/terminales y la
 descarga de mesas en `rpc_pull_catalog`. Un administrador de otra organización no
 puede registrar terminales ni leer datos ajenos.
 
+### Estación de producción
+
+`profiles.production_station` vale `KITCHEN`, `BAR` o `BOTH` (por defecto). El
+backend lo aplica en dos capas:
+
+- RLS: `production_orders_select` y `production_order_items_select` exigen
+  `app.production_station_allows(station)`, así que cocina no ve comandas de
+  barra ni al revés.
+- RPC: `rpc_send_production` y `rpc_update_production_status` llaman a
+  `app.assert_production_station`; una estación no autorizada eleva `FORBIDDEN`
+  (error duro, no conflicto). El permiso `production.*` sigue siendo necesario.
+
+Cambiar la estación en la app o en un archivo local no altera este alcance: solo
+un `UPDATE` administrativo sobre `profiles` lo hace. `BOTH` mantiene la vista y
+operación completas para administración, caja y mesoneros.
+
 ## 6. Terminales
 
 - `rpc_register_terminal` emite un token aleatorio y guarda solo su SHA-256.
@@ -114,7 +137,23 @@ puede registrar terminales ni leer datos ajenos.
 - Una tablet nunca recibe permisos de personal ni acceso a ventas, perfiles,
   auditoría u otras mesas.
 
-## 8. Secretos
+## 8. Sesiones locales del Desktop
+
+El POS de escritorio mantiene su propia sesión de perfil sobre SQLite:
+
+- El PIN se verifica con PBKDF2; nunca se guarda en claro.
+- `local_profile_sessions` registra inicio, expiración, fin y revocación. La
+  sesión dura 8 horas y una fila expirada, terminada o revocada deja de ser
+  válida de inmediato.
+- `requireCurrentPermission` falla por defecto: sin sesión activa, con perfil
+  distinto al del terminal o sin el permiso local, lanza excepción en lugar de
+  asumir acceso.
+- Los permisos locales solo condicionan la UI/operaciones del terminal; el
+  backend vuelve a autorizar cada RPC y RLS cada lectura.
+- La sincronización se detiene si no hay `supabase.access_token`; sin token no
+  hay llamadas anónimas al backend.
+
+## 9. Secretos
 
 No se almacenan ni distribuyen `service_role` keys, JWT secret ni contraseñas de
 base en Flutter, APK, repositorio o documentación pública. El cliente usa

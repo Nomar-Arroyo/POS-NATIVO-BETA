@@ -36,4 +36,14 @@ class SyncConflict {
         'local_value': localValue,
         'remote_value': remoteValue,
       };
+
+  factory SyncConflict.fromJson(Map<String, dynamic> json) => SyncConflict(
+        operationId: json['operation_id'] as String,
+        entityId: json['entity_id'] as String,
+        idempotencyKey: json['idempotency_key'] as String,
+        type: ConflictType.values.byName(json['type'] as String),
+        message: json['message'] as String,
+        localValue: json['local_value'] as String,
+        remoteValue: json['remote_value'] as String,
+      );
 }

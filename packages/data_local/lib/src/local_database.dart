@@ -19,6 +19,7 @@ class LocalDatabase {
   final bool isDemoMode;
 
   static const _pinIterations = 120000;
+  static const _profileSessionDuration = Duration(hours: 8);
   static const _roleNames = {
     'admin': 'Administrador',
     'cashier': 'Cajero',
@@ -171,15 +172,49 @@ class LocalDatabase {
 
   void requireCurrentPermission(String permissionCode) {
     final workspace = localWorkspace;
-    if (workspace == null) return;
-    final sessions = database.select(
-      'SELECT 1 FROM local_profile_sessions WHERE terminal_id = ? '
-      'AND ended_at IS NULL LIMIT 1',
-      [workspace.terminalId],
-    );
-    if (sessions.isNotEmpty && !hasPermission(permissionCode)) {
+    if (workspace == null) {
+      throw StateError('Configure the local workspace first');
+    }
+    final session = _activeSessionRow(workspace);
+    if (session == null) {
+      throw StateError('No hay una sesión local activa para este terminal');
+    }
+    final sessionProfileId = session['profile_id'] as String;
+    if (sessionProfileId != workspace.profileId) {
+      throw StateError(
+        'La sesión local no corresponde al perfil configurado en el terminal',
+      );
+    }
+    if (!hasPermission(permissionCode, profileId: sessionProfileId)) {
       throw StateError('El perfil actual no tiene permiso: $permissionCode');
     }
+  }
+
+  Row? _activeSessionRow(LocalWorkspace workspace) {
+    final now = DateTime.now().toUtc().toIso8601String();
+    final rows = database.select(
+      'SELECT s.id, s.profile_id, s.started_at, s.expires_at '
+      'FROM local_profile_sessions s '
+      'JOIN profiles p ON p.id = s.profile_id '
+      'WHERE s.terminal_id = ? AND s.ended_at IS NULL AND s.revoked_at IS NULL '
+      'AND s.expires_at IS NOT NULL AND s.expires_at > ? '
+      'AND p.status = ? AND p.deleted_at IS NULL '
+      'ORDER BY s.started_at DESC LIMIT 1',
+      [workspace.terminalId, now, 'active'],
+    );
+    return rows.isEmpty ? null : rows.first;
+  }
+
+  String? get activeProfileSessionId {
+    final workspace = localWorkspace;
+    if (workspace == null) return null;
+    return _activeSessionRow(workspace)?['id'] as String?;
+  }
+
+  String? get activeProfileSessionExpiresAt {
+    final workspace = localWorkspace;
+    if (workspace == null) return null;
+    return _activeSessionRow(workspace)?['expires_at'] as String?;
   }
 
   List<String> get currentRoleCodes {
@@ -368,6 +403,40 @@ class LocalDatabase {
     );
   }
 
+  int revokeLocalProfileSessions({String? profileId, String reason = 'revoked'}) {
+    final workspace = _requiredWorkspace();
+    final now = DateTime.now().toUtc().toIso8601String();
+    final rows = database.select(
+      'SELECT id, profile_id FROM local_profile_sessions '
+      'WHERE terminal_id = ? AND ended_at IS NULL AND revoked_at IS NULL'
+      '${profileId == null ? '' : ' AND profile_id = ?'}',
+      [workspace.terminalId, if (profileId != null) profileId],
+    );
+    if (rows.isEmpty) return 0;
+    database.execute('BEGIN IMMEDIATE');
+    try {
+      for (final row in rows) {
+        database.execute(
+          'UPDATE local_profile_sessions SET ended_at = ?, revoked_at = ?, '
+          'end_reason = ? WHERE id = ? AND ended_at IS NULL',
+          [now, now, reason, row['id']],
+        );
+        _writeAuthAudit(
+          profileId: row['profile_id'] as String,
+          action: 'LOCAL_PROFILE_SESSION_REVOKED',
+          entityId: row['id'] as String,
+          details: {'reason': reason},
+          occurredAt: now,
+        );
+      }
+      database.execute('COMMIT');
+      return rows.length;
+    } catch (_) {
+      database.execute('ROLLBACK');
+      rethrow;
+    }
+  }
+
   bool isStationDisplayEnabled(String station) {
     final key = _stationPreferenceKey(station);
     return getLocalPreference(key) != '0';
@@ -426,6 +495,10 @@ class LocalDatabase {
           (_) => Random.secure().nextInt(10),
         ).join(),
       ),
+    );
+    _startProfileSession(
+      profileId: 'demo-admin',
+      occurredAt: DateTime.now().toUtc().toIso8601String(),
     );
     loadSyntheticDemoCatalog();
   }
@@ -1304,6 +1377,7 @@ class LocalDatabase {
 
   String confirmSale(LocalSaleInput sale) {
     requireCurrentPermission('sales.create');
+    final workspace = _requiredWorkspace();
     if (sale.items.isEmpty) {
       throw const LocalSaleConflictException(
         'EMPTY_SALE',
@@ -1391,18 +1465,16 @@ class LocalDatabase {
     database.execute('BEGIN IMMEDIATE');
     try {
       final now = DateTime.now().toUtc().toIso8601String();
-      final workspace = localWorkspace;
-      if (workspace != null &&
-          (sale.organizationId != workspace.organizationId ||
-              sale.branchId != workspace.branchId ||
-              sale.terminalId != workspace.terminalId ||
-              sale.profileId != workspace.profileId)) {
+      if (sale.organizationId != workspace.organizationId ||
+          sale.branchId != workspace.branchId ||
+          sale.terminalId != workspace.terminalId ||
+          sale.profileId != workspace.profileId) {
         throw const LocalSaleConflictException(
           'WORKSPACE_MISMATCH',
           'Sale identity does not match the configured local terminal',
         );
       }
-      if (workspace != null && sale.cashSessionId == null) {
+      if (sale.cashSessionId == null) {
         throw const LocalSaleConflictException(
           'CASH_SESSION_REQUIRED',
           'A local cash session is required for this sale',
@@ -1411,14 +1483,12 @@ class LocalDatabase {
       if (sale.cashSessionId != null) {
         final sessions = database.select(
           'SELECT id, cash_register_id, terminal_id FROM cash_sessions '
-          'WHERE id = ? AND status = ?',
-          [sale.cashSessionId, 'open'],
+          'WHERE id = ? AND organization_id = ? AND status = ?',
+          [sale.cashSessionId, workspace.organizationId, 'open'],
         );
         if (sessions.isEmpty ||
-            (workspace != null &&
-                (sessions.first['cash_register_id'] !=
-                        workspace.cashRegisterId ||
-                    sessions.first['terminal_id'] != workspace.terminalId))) {
+            sessions.first['cash_register_id'] != workspace.cashRegisterId ||
+            sessions.first['terminal_id'] != workspace.terminalId) {
           throw const LocalSaleConflictException(
             'CASH_SESSION_CLOSED',
             'Sale cannot be attached to a closed or unrelated cash session',
@@ -1509,6 +1579,8 @@ class LocalDatabase {
           );
         }
       }
+      final lineIds = <String>[];
+      final paymentIds = <String>[];
       database.execute(
         'INSERT INTO sales(id, organization_id, branch_id, terminal_id, '
         'profile_id, cash_session_id, sale_number, status, sale_kind, '
@@ -1548,12 +1620,14 @@ class LocalDatabase {
             'Item quantity must be greater than zero',
           );
         }
+        final lineId = const Uuid().v4();
+        lineIds.add(lineId);
         database.execute(
           'INSERT INTO sale_items(id, organization_id, sale_id, variant_id, '
           'quantity, unit_price_minor, subtotal_minor, tax_minor, line_currency, created_at) '
           'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
           [
-            const Uuid().v4(),
+            lineId,
             sale.organizationId,
             sale.id,
             item.variantId,
@@ -1575,6 +1649,12 @@ class LocalDatabase {
             'Inventory consumption must be greater than zero',
           );
         }
+        if (consumption.warehouseId != workspace.warehouseId) {
+          throw const LocalSaleConflictException(
+            'INVENTORY_WAREHOUSE_INVALID',
+            'Local sales can only consume the configured terminal warehouse',
+          );
+        }
         final productPolicy = database.select(
           'SELECT p.offline_sellable, p.active, v.active AS variant_active '
           'FROM product_variants v JOIN products p ON p.id = v.product_id '
@@ -1594,8 +1674,8 @@ class LocalDatabase {
         final balances = database.select(
           'SELECT id, quantity_minor, reserved_minor, version '
           'FROM inventory_balances '
-          'WHERE warehouse_id = ? AND variant_id = ?',
-          [consumption.warehouseId, consumption.variantId],
+          'WHERE organization_id = ? AND warehouse_id = ? AND variant_id = ?',
+          [sale.organizationId, consumption.warehouseId, consumption.variantId],
         );
         if (balances.isEmpty) {
           throw LocalSaleConflictException(
@@ -1663,12 +1743,15 @@ class LocalDatabase {
       }
 
       for (final payment in sale.payments) {
-        if (BigInt.parse(payment.amountMinor) <= BigInt.zero) {
+        if (BigInt.parse(payment.amountMinor) <= BigInt.zero ||
+            payment.method.trim().isEmpty) {
           throw const LocalSaleConflictException(
             'INVALID_PAYMENT',
-            'Payment amount must be greater than zero',
+            'Payment method and amount must be valid',
           );
         }
+        final paymentId = const Uuid().v4();
+        paymentIds.add(paymentId);
         final paymentIdempotency =
             '${sale.idempotencyKey}:payment:${payment.method}:${payment.currencyCode}';
         database.execute(
@@ -1678,7 +1761,7 @@ class LocalDatabase {
           'status, idempotency_key, created_at) '
           'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
           [
-            const Uuid().v4(),
+            paymentId,
             sale.organizationId,
             sale.id,
             payment.method,
@@ -1755,15 +1838,58 @@ class LocalDatabase {
           sale.idempotencyKey,
           1,
           jsonEncode({
+            'schema_version': 'sale.v1',
+            'idempotency_key': sale.idempotencyKey,
             'sale': {
               'id': sale.id,
               'sale_number': sale.saleNumber,
-              'total_minor': sale.totalMinor,
+              'branch_id': sale.branchId,
+              'terminal_id': sale.terminalId,
+              'profile_id': sale.profileId,
+              'cash_session_id': sale.cashSessionId,
+              'dining_session_id': sale.diningSessionId,
               'total_currency': sale.totalCurrency,
+              'total_minor': int.parse(sale.totalMinor),
               'exchange_rate_snapshot_id': sale.exchangeRateSnapshotId,
               'beta_origin_id': sale.betaOriginId,
-              'dining_session_id': sale.diningSessionId,
+              'created_at': now,
             },
+            'items': [
+              for (var index = 0; index < sale.items.length; index++)
+                {
+                  'id': lineIds[index],
+                  'variant_id': sale.items[index].variantId,
+                  'quantity': num.parse(sale.items[index].quantity),
+                  'unit_price_minor':
+                      int.parse(sale.items[index].unitPriceMinor),
+                  'tax_minor': int.parse(sale.items[index].taxMinor),
+                },
+            ],
+            'payments': [
+              for (var index = 0; index < sale.payments.length; index++)
+                {
+                  'id': paymentIds[index],
+                  'method': sale.payments[index].method,
+                  'amount_minor':
+                      int.parse(sale.payments[index].amountMinor),
+                  'currency_code': sale.payments[index].currencyCode,
+                  'exchange_rate_snapshot_id':
+                      sale.payments[index].exchangeRateSnapshotId,
+                  'original_amount_minor':
+                      int.parse(sale.payments[index].originalAmountMinor),
+                  'original_currency_code':
+                      sale.payments[index].originalCurrencyCode,
+                  'reference': sale.payments[index].reference,
+                },
+            ],
+            'inventory_consumptions': [
+              for (final consumption in sale.inventoryConsumptions)
+                {
+                  'warehouse_id': consumption.warehouseId,
+                  'variant_id': consumption.variantId,
+                  'quantity': num.parse(consumption.quantity),
+                },
+            ],
           }),
           'PENDING',
           0,
@@ -2106,6 +2232,10 @@ class LocalDatabase {
   }) {
     final workspace = _requiredWorkspace();
     final sessionId = const Uuid().v4();
+    final expiresAt = DateTime.parse(occurredAt)
+        .toUtc()
+        .add(_profileSessionDuration)
+        .toIso8601String();
     database.execute('BEGIN IMMEDIATE');
     try {
       database.execute(
@@ -2118,9 +2248,9 @@ class LocalDatabase {
         [profileId],
       );
       database.execute(
-        'INSERT INTO local_profile_sessions(id, profile_id, terminal_id, started_at) '
-        'VALUES (?, ?, ?, ?)',
-        [sessionId, profileId, workspace.terminalId, occurredAt],
+        'INSERT INTO local_profile_sessions(id, profile_id, terminal_id, '
+        'started_at, expires_at) VALUES (?, ?, ?, ?, ?)',
+        [sessionId, profileId, workspace.terminalId, occurredAt, expiresAt],
       );
       _writeAuthAudit(
         profileId: profileId,

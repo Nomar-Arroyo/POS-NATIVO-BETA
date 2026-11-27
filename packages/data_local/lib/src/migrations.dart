@@ -626,6 +626,17 @@ CREATE INDEX idx_auth_failures
   ON audit_logs(profile_id, action, occurred_at);
 ''',
     ),
+    (
+      version: 6,
+      name: '0006_local_session_expiry_and_revocation',
+      sql: r'''
+ALTER TABLE local_profile_sessions ADD COLUMN expires_at TEXT;
+ALTER TABLE local_profile_sessions ADD COLUMN revoked_at TEXT;
+
+CREATE INDEX idx_local_profile_sessions_active
+  ON local_profile_sessions(terminal_id, ended_at, revoked_at, expires_at);
+''',
+    ),
   ];
 
   Future<void> migrate() async {

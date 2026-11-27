@@ -17,7 +17,9 @@ conserva en `apps/beta`.
 - Dashboard con tarjetas de superficie limpia, estados vacíos informativos y
   onda inferior vectorial adaptada al tema.
 
-La integración Supabase/RLS y la impresión física siguen pendientes.
+La integración con Supabase está implementada para enviar la outbox de
+`confirm_sale` (recibos estrictos, conflictos retenidos y snapshot del motor).
+El resto de operaciones de la outbox y la impresión física siguen pendientes.
 
 ## Datos locales
 
@@ -35,6 +37,18 @@ Set-Location apps/desktop
 flutter pub get
 flutter run -d windows
 ```
+
+Sincronización opcional (sin estas variables la app funciona offline y no
+intenta llamar al backend):
+
+```powershell
+flutter run -d windows `
+  --dart-define=SUPABASE_URL=https://<ref>.supabase.co `
+  --dart-define=SUPABASE_ANON_KEY=<anon-key>
+```
+
+El JWT del usuario autenticado se guarda en la preferencia local
+`supabase.access_token`; sin token el ciclo de sincronización se omite.
 
 ## Validación
 
