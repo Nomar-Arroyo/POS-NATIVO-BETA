@@ -2,7 +2,8 @@
 
 Este documento describe cómo llevar las migraciones a un proyecto Supabase.
 El backend fue verificado localmente contra PostgreSQL 19 con 19 pruebas de
-integración; **no se ha desplegado a un proyecto Supabase real**.
+integración y en GitHub Actions contra PostgreSQL 16 con 19/19 pruebas; **no se
+ha desplegado a un proyecto Supabase real**.
 
 ## 1. Requisitos
 
@@ -96,8 +97,8 @@ Prueba también desde un cliente con la clave `anon`:
 
 ## 7. Limitaciones conocidas
 
-- No hay despliegue Supabase ejecutado en este entorno; el CI de backend aún no
-  se ha corrido en GitHub.
+- El job de backend en GitHub Actions pasó en PostgreSQL 16; no hay despliegue
+  Supabase ejecutado en este entorno.
 - No se implementaron Edge Functions ni Realtime; el transporte usa RPC.
 - `rpc_register_terminal` y `rpc_revoke_terminal` elevan conflictos en lugar de
   devolver JSON de conflicto.

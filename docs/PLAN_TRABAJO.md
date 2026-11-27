@@ -128,7 +128,7 @@ Los contratos se aprueban antes de escribir RPC o UI que dependa de ellos.
 | B-07 | Dispositivos, pairing y sesiones | Compañero | B-02, K-03 | Código de un solo uso, expiración breve, revocación, credencial de alcance mínimo | Hecho |
 | B-08 | Pedidos de cliente | Compañero | B-07, K-02 | Pedido creado atómicamente; precio y disponibilidad validados en servidor; enrutamiento a cocina/barra | Hecho |
 | B-09 | Realtime y notificaciones | Compañero | B-08 | Estado de pedido observable por tablet sin acceso a datos administrativos | Pendiente (se usa sondeo por RPC) |
-| B-10 | CI de backend | Compañero | B-01 | Migraciones, RPC y RLS ejecutadas en CI con base efímera | En curso (job agregado; sin primera ejecución en GitHub) |
+| B-10 | CI de backend | Compañero | B-01 | Migraciones, RPC y RLS ejecutadas en CI con base efímera | Hecho (19/19 pruebas PostgreSQL pasan en GitHub Actions) |
 
 ### 6.4 Aplicación móvil (M4)
 
@@ -227,6 +227,11 @@ de alcance escondidos en el PR.
   RPC comerciales, tablets y descarga), `seed/demo.sql` idempotente y 19 pruebas
   de integración en PostgreSQL 19 en verde. Se documentan contratos, seguridad,
   tablets, sincronización y despliegue. B-01 a B-05, B-07, B-08, K-01 a K-04
-  quedan Hechos; B-06 y B-10 en curso (transporte Desktop y primera ejecución
-  del job backend); B-09 pendiente. No se desplegó a Supabase ni se conectó el
-  outbox de Desktop.
+  quedan Hechos; B-06 en curso (transporte Desktop); B-09 pendiente. No se
+  desplegó a Supabase ni se conectó el outbox de Desktop.
+- **2026-11-27** · El job backend de GitHub Actions aplicó bootstrap, las cuatro
+  migraciones y seed en PostgreSQL 16; las 19 pruebas pasaron. El workflow
+  Flutter falló en Analyze porque `stable` avanzó a 3.50.1, que depreca
+  `package:flutter/material.dart`; se fija Flutter 3.47.7 para reproducir la
+  versión validada localmente. La matriz completa queda pendiente de una nueva
+  ejecución del workflow.
